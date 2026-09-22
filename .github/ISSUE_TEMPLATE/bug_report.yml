@@ -1,0 +1,145 @@
+name: Bug report
+description: The scraper ran but the result was wrong, empty, or it crashed.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before anything else: never paste an API key, a proxy password or a
+        full `ws://user:pass@...` endpoint into a public issue.** The scrapers
+        mask credentials in their own logs, but raw HTML dumps do not.
+        Replace them with `***`.
+
+        A few things answer most reports faster than we can:
+
+        - **Exit 3 (blocked)?** This repo's own research found no captcha,
+          proxy or browser challenge anywhere on this site from a plain
+          datacentre fetch (see `scraper_api_client.py`'s docstring and
+          `.env.example`) — so exit 3 here usually means something upstream
+          really changed, not that a proxy or `--twocaptcha-key` is missing.
+          Check `product_parser.detect_bot_challenge()` / `BOT_CHALLENGE_MARKERS`
+          against what the page actually returned.
+        - **Only one page of products?** That is by design: this site's
+          listing paging (`?start=N&sz=25`) is disallowed by its own
+          robots.txt, so a listing run is a single fetch. To cover a whole
+          locale, read its `sitemap_0-product.xml` and run `--mode product`
+          over it — see the README's "Covering a whole locale".
+        - **Every price is `null`?** Check the locale. `/int/en/` and `/ru/`
+          are showcase storefronts that publish no prices at all, and their
+          tiles still carry `data-currency="USD"`, which this parser
+          deliberately does not read.
+        - **A price looks like a per-kilo figure?** The `gb` tiles render
+          `£41.00 (£1,025.00/Kg)`. The parenthesised unit price is stripped
+          before matching — if one is getting through, say which product.
+        - **`sku` and the id in the URL disagree?** They are supposed to.
+          `sku` is the VARIANT id and the product URL carries the MASTER id;
+          one master covers every shade of a product.
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine
+      options:
+        - api_scraper.py (the primary engine — start here)
+        - playwright_scraper.py
+        - puppeteer_scraper.py
+        - selenium_scraper.py
+        - scraper_api_client.py
+        - fingerprint_client.py
+        - other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which --mode
+      options:
+        - category
+        - product
+        - not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: browser_route
+    attributes:
+      label: How was the browser reached
+      options:
+        - No browser at all (api_scraper.py, plain HTTPS through a proxy)
+        - A browser the script launched itself
+        - A remote browser over --cdp-endpoint
+        - No browser (scraper_api_client.py, through the vendor's exits)
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: exit_code
+    attributes:
+      label: Exit code
+      description: >-
+        `echo $?` straight after the run. These mean specific things — 3 is a
+        challenge page, 4 is "ran fine, found nothing", 6 is a partial run.
+        The table is in the README.
+      placeholder: "4"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command
+      description: With credentials replaced by `***`.
+      render: shell
+      placeholder: |
+        python3 api_scraper.py \
+          --category "WOMEN / SALE" --max-grids 1 --out bershka_products
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: >-
+        The whole run, not just the last line — the useful detail is usually
+        upstream of the error. Credentials replaced by `***`.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      placeholder: >-
+        131 rows, as the README says "WOMEN / SALE / Bershka / Dresses and
+        jumpsuits" yielded on 2026-09-20.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Please run and paste:
+        ```
+        python3 -c "import sys, platform; print(sys.version, platform.platform())"
+        pip list 2>/dev/null | grep -Ei "playwright|pyppeteer|selenium|beautifulsoup4|requests|webdriver"
+        python3 smoke_test.py | tail -3
+        ```
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The offline suite passes on my machine (`python3 smoke_test.py`)
+          required: true
+        - label: I removed every API key, password and credentialled URL from this report
+          required: true

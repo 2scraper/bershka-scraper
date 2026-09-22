@@ -1,0 +1,13 @@
+{
+  "source": "bershka.com",
+  "mode": "category",
+  "status": "complete",
+  "stop_reason": "completed",
+  "pages_requested": 1,
+  "pages_completed": 1,
+  "pages_failed": [],
+  "products": 131,
+  "start_url": "https://www.bershka.com",
+  "final_url": "https://www.bershka.com",
+  "finished_at": "2026-09-20T13:19:08.561592+00:00"
+}

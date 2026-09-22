@@ -1,0 +1,182 @@
+name: canary
+
+# tests.yml (deliberately) never touches bershka.com. That leaves a real gap:
+# a change to Inditex's catalogue payload only shows up when a user hits it
+# and files an issue, while the offline badge stays green throughout. This
+# workflow is the other half — a real run, against the real API, on a
+# schedule.
+#
+# WHAT THIS SITE DOES TO A RUNNER, AND WHY THIS CANARY CAN SKIP
+# ------------------------------------------------------------------------
+# This edge refuses by ADDRESS. Measured 2026-09-19 from a residential
+# address: every URL on this host answered HTTP 403 in 195 bytes,
+# /robots.txt included, carrying `x-reference-error` and
+# `akamai-cache-status: Error from child`. Through a proxy the same URLs
+# answered 200. Nothing about that 403 is a challenge to solve or wait out.
+#
+# MEASURED 2026-09-20, first dispatch: a bare GitHub runner's address was
+# NOT refused. With no proxy secret configured the run reached the API and
+# read `store 44009506 catalog 40259534 GB GBP` in three requests. So this
+# canary does its job without a secret, and the skip path below is insurance
+# against a future refusal rather than the normal case. One observation, on
+# one runner, on one morning — the rule below deliberately does not depend on
+# it holding:
+#
+#   * If BERSHKA_PROXY (or BERSHKA_CDP_ENDPOINT) is configured, the run goes
+#     through it — the repo's documented default path — and a refusal is a
+#     REAL failure worth a red check.
+#   * If neither is configured, a refusal is a fact about that runner's
+#     address, which nobody in this repo can fix, so the job SKIPS with a
+#     ::notice:: instead of going red. A check that goes red for a reason
+#     nobody can act on is a check everyone learns to ignore.
+#
+# Every other exit code is still interpreted and still turns this red, so a
+# payload change cannot hide behind the skip.
+#
+# It runs `api_scraper.py`, the repo's primary engine: no browser to install,
+# and it exercises the whole route — store config, menu, grid, productsArray
+# — plus the parser. It does NOT cover the three browser engines; that gap is
+# recorded rather than papered over.
+#
+# Secrets reach the scraper through the ENVIRONMENT, never a command line —
+# `ps` reads argv. env_config.py reads exactly these variable names, and an
+# unset secret arrives as an empty string that the loader treats as unset, so
+# the same two lines are correct with and without them.
+on:
+  schedule:
+    # Once a day, off the hour, so it is not competing with everyone else's
+    # on-the-hour cron jobs for runner availability.
+    - cron: "37 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  live-run:
+    runs-on: ubuntu-latest
+    env:
+      # `secrets` is not available in a job-level `if`, so presence is tested
+      # here, once, and read from each step's `if` and shell below. These are
+      # the strings "true"/"false", never the secret itself.
+      HAVE_CDP: ${{ secrets.BERSHKA_CDP_ENDPOINT != '' }}
+      HAVE_PROXY: ${{ secrets.BERSHKA_PROXY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        # requirements.txt only. The primary engine needs no browser, which
+        # is most of why this canary is cheap enough to run daily.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Say which path this run is taking
+        run: |
+          if [ "$HAVE_PROXY" = "true" ]; then
+            echo "::notice::Running through BERSHKA_PROXY — the repo's documented default path. A refusal here is a real failure."
+          elif [ "$HAVE_CDP" = "true" ]; then
+            echo "::notice::BERSHKA_CDP_ENDPOINT is set but api_scraper.py does not use it; this run goes out from the bare runner. A refusal will SKIP rather than fail."
+          else
+            echo "::notice::Running from a bare runner with no exit configured. If this address is refused, the job SKIPS rather than failing — see this workflow's header."
+          fi
+
+      - name: Scrape a real category through the catalogue API
+        id: run
+        # One grid, not all 585: the canary is here to prove the route and
+        # the parser still work, not to mirror the catalogue.
+        #
+        # THE CATEGORY IS CHOSEN, and the first version of this workflow got
+        # it wrong. `--category "WOMEN / SALE" --max-grids 1` takes the FIRST
+        # grid whose trail matches, in menu order — and that is the "view
+        # all" parent, `1_PW_SALE_CONO_NORTE`, which lists no products at
+        # all. The run wrote 0 rows and exited 4, so the canary went red on
+        # its very first dispatch for a reason that had nothing to do with
+        # the site. Measured 2026-09-22.
+        #
+        # What this one is instead:
+        #   * a LEAF, so there is no empty parent in front of it;
+        #   * non-seasonal — a SALE category is gone by definition, and a
+        #     canary that expires is a canary nobody trusts;
+        #   * sized, 86 products -> 131 rows in 6 requests and ~5 MiB. Big
+        #     enough that a collapse trips `--run-check`'s row floor, small
+        #     enough to run daily on paid bandwidth.
+        #
+        # NO `--max-products`: capping rows stops the walk early and the run
+        # reports `partial` with stop_reason `max_products_reached`, which
+        # this workflow correctly treats as a failure. Bound the work by
+        # choosing the grid, not by truncating its output.
+        #
+        # set +e: GitHub Actions runs `run:` steps as `bash -e`, so without
+        # this a non-zero scraper exit aborts the script on THAT line and the
+        # `echo "exit_code=$?"` below never runs. continue-on-error only stops
+        # the step from failing the job; it does not touch the shell's errexit.
+        continue-on-error: true
+        env:
+          # Through the environment, never argv (see the header).
+          BERSHKA_PROXY: ${{ secrets.BERSHKA_PROXY }}
+        run: |
+          set +e
+          python3 api_scraper.py \
+            --category "WOMEN / Accessories / Bags and purses" --max-grids 1 \
+            --out canary_run
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Interpret the exit code
+        id: verdict
+        env:
+          CODE: ${{ steps.run.outputs.exit_code }}
+        run: |
+          code="$CODE"
+          skipped=false
+          case "$code" in
+            0)   echo "OK — rows parsed from a live run." ;;
+            3)   if [ "$HAVE_PROXY" = "true" ]; then
+                   echo "::error::Refused before parsing (exit 3) while running through BERSHKA_PROXY. That is the documented default path failing, not the runner's address. A 195-byte 403 with x-reference-error means the EXIT was refused — check the proxy credentials and whether that exit's address is still accepted — before looking at product_parser.is_edge_refusal()."
+                 else
+                   # No exit configured, so this went out from the runner. The
+                   # edge refuses by address and nothing in this repo can
+                   # change the runner's address, so this must not paint the
+                   # check red.
+                   echo "::notice::SKIPPED: this runner's address was refused before anything was parsed (exit 3), and no BERSHKA_PROXY secret is configured to route around it. This edge refuses by address — see the header — so that is a property of the runner, not of the site or of this scraper. Set BERSHKA_PROXY to have this run go out through an accepted exit, and to make a refusal here a real failure."
+                   skipped=true
+                   code=0
+                 fi ;;
+            4)   echo "::error::Ran fine but wrote 0 rows (exit 4). Look at the log line naming the grid BEFORE blaming the parser: a grid that lists no products is a real and legitimate answer, and this workflow shipped once pointed at exactly such a grid. If the grid did list products, the payload shape changed — product_parser.parse_products_array()'s docstring says what it is expected to be." ;;
+            5)   echo "::error::Remote error (exit 5). With BERSHKA_PROXY set that is the proxy or its credentials; with none configured, nothing here should have called a remote service at all and the run log is where to start." ;;
+            6)   echo "::error::Partial run (exit 6) — the run stopped early. canary_run.meta.json names the stop reason." ;;
+            2)   echo "::error::Bad usage (exit 2) — this workflow's own arguments are wrong, not the site." ;;
+            *)   echo "::error::Unexpected exit code $code (see the step above for the traceback)." ;;
+          esac
+          echo "skipped=$skipped" >> "$GITHUB_OUTPUT"
+          test "$code" = "0"
+
+      - name: Check the scraped data with the repo's own checks
+        # Nothing was fetched on the skip path, so there is nothing to check.
+        if: steps.verdict.outputs.skipped != 'true'
+        # CLAUDE.md §11: this step CALLS the shipped checks and does not
+        # re-implement them. `--sample-check` is the schema and fabrication
+        # check; `--run-check` is the row floor, the metadata and the
+        # one-row-per-SKU invariant. Both live in .github/ci_checks.py, run
+        # locally with the same command, and cannot drift from what CI
+        # asserts — which is exactly the failure a sibling repo shipped when
+        # its workflow carried its own copy.
+        run: |
+          python3 .github/ci_checks.py --sample-check --run-check \
+            --output-prefix canary_run
+
+      - name: Upload run artifacts
+        # Always, not just on failure: a run that returns the WRONG numbers
+        # with no error is exactly the regression that needs the actual bytes
+        # the parser saw, not a pass/fail badge.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-run-${{ github.run_id }}
+          path: |
+            canary_run.json
+            canary_run.csv
+            canary_run.meta.json
+          if-no-files-found: ignore
+          retention-days: 14

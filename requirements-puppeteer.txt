@@ -1,0 +1,15 @@
+# Puppeteer engine, via pyppeteer -- a Python port of Puppeteer's API, not a
+# Node.js process. See puppeteer_scraper.py's docstring for why that is what
+# "the Puppeteer build" means in this repo.
+#
+# Downloads its own Chromium on first run.
+#
+# Note: pyppeteer pins pyee<12 and (transitively, via an old websockets pin)
+# an older urllib3 than selenium wants, which conflict with playwright and
+# selenium respectively. Prefer a separate virtualenv for this engine -- this
+# is exactly what CI's engine-smoke job does, one venv per engine.
+#
+# pyppeteer is effectively unmaintained upstream (its own README points at
+# Playwright). It is kept here for parity with this family's usual
+# three-engine lineup, and for anyone who already depends on it.
+pyppeteer>=1.0.2

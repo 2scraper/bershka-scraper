@@ -1,0 +1,11 @@
+# Selenium engine.
+#
+# Works against a browser it launches itself. It CANNOT attach to an
+# authenticated remote CDP endpoint (chromedriver's `debuggerAddress` takes a
+# bare host:port with nowhere to put credentials) and it CANNOT authenticate
+# a proxy at all -- selenium_scraper.py strips proxy credentials and warns
+# rather than silently sending requests unauthenticated without saying so.
+# Use playwright_scraper.py or puppeteer_scraper.py for --cdp-endpoint or an
+# authenticated proxy.
+#
+selenium>=4.15.0

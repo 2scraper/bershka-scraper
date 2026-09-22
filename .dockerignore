@@ -1,0 +1,22 @@
+.git/
+.github/
+.env
+# A downloaded proxy list is a credential file, one login and password
+# per line. The Dockerfile COPYs an explicit list rather than `COPY . .`,
+# so this cannot get in today -- but a defence that depends on nobody ever
+# writing `COPY . .` is not a defence. Same narrow glob as .gitignore.
+proxylist*.txt
+*.log
+*.key
+secrets*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.fingerprint_cache/
+.venv/
+venv/
+env/
+bershka_products.*
+canary_run.*
+*_debug.html
+*_debug.png

@@ -1,0 +1,81 @@
+name: Site changed / selectors broke
+description: bershka.com changed something and the parser no longer matches.
+labels: ["site-change"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most common way a scraper stops working, and it is worth its
+        own report because the fix is different from a code bug: something on
+        bershka.com moved.
+
+        Useful to know before filing: **this repo does not parse HTML at all.**
+        A rendered listing page carries no products — 0 JSON-LD blocks, 0
+        product ids, 0 grid classes. Everything comes from JSON under
+        `/itxrest/`, so "the markup changed" is almost never the diagnosis.
+
+        Three things can move: the endpoint paths themselves, the payload
+        shape (`bundleProductSummaries[].detail.colors[].sizes[]`), or the
+        menu that grids are reached through. Saying which narrows the fix a
+        lot, and pasting the payload fragment beats describing it.
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which --mode
+      options:
+        - category
+        - product
+        - not sure / more than one
+    validations:
+      required: true
+
+  - type: dropdown
+    id: what_broke
+    attributes:
+      label: What stopped matching
+      options:
+        - Rows (0 rows from a category that has products)
+        - A specific field is null or wrong (price, size, colour, availability, ...)
+        - A colour or size tree is not expanded (one row per product, not per SKU)
+        - An endpoint answers 404 or a shape the parser does not recognise
+        - Every request is refused with a 195-byte 403 (that is the EXIT, not the site)
+        - The menu no longer lists the grid you expected
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: URL
+      description: The exact page URL you ran against.
+      placeholder: "https://www.bershka.com/gb/women.html"
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence from the page
+      description: |
+        Whichever of these you can get. A capture beats a description.
+
+        - The JSON fragment for ONE product, from
+          `/itxrest/3/catalog/store/{store}/{catalog}/productsArray?productIds={id}`.
+          Trim it, but keep the `bundleProductSummaries` nesting intact — that
+          nesting IS the thing that usually broke.
+        - For a field problem: the value you got, and the value in the payload.
+        - For a refusal: the response headers. `x-reference-error` plus
+          `akamai-cache-status: Error from child` means your exit address was
+          refused before the site saw the request, which is not a parser bug.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: >-
+        Whether it reproduces on a second engine, and when it last worked.

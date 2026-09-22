@@ -1,0 +1,29 @@
+# bershka-scraper — core dependencies
+#
+#   pip install -r requirements.txt
+#
+# Needed by everything, including the offline test suite AND
+# scraper_api_client.py (the browserless fourth engine -- unlike the three
+# browser engines below, it needs no extra requirements-*.txt file: `requests`
+# is all it uses). These two are shared by every engine and by diff_runs.py /
+# env_config.py.
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+
+# Then either run scraper_api_client.py directly (see its own docstring --
+# this site was measured 2026-09-10 to need no browser, no proxy and no
+# --cdp-url for the plain HTTP path to work), or install exactly ONE of the
+# three browser engines for a page kind
+# this repo has not yet measured needing a browser for:
+#
+#   pip install -r requirements-playwright.txt && playwright install chromium
+#   pip install -r requirements-selenium.txt
+#   pip install -r requirements-puppeteer.txt
+#
+# Install one, not all three. playwright and pyppeteer declare mutually
+# unsatisfiable pins (pyee <12 vs >=13), and pyppeteer and selenium collide on
+# urllib3 (<2.0 vs >=2.0). All three do run side by side in practice, because
+# neither library touches the incompatible part -- but `pip check` will
+# report the conflict, and pip may resolve it by downgrading something you
+# wanted. If you genuinely need more than one engine, use a virtualenv per
+# engine (this is exactly what CI's engine-smoke job does).

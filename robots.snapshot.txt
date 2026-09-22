@@ -1,0 +1,242 @@
+#
+#
+# BSKBSKBSKMBSk                                            dMN              BSk                       
+# BSK      dBSKm                                           bsk              BSk                       
+# BSK        BSK                                           bsk              BSk                       
+# BSK        NMN      mNBSkBSkd    bsk mNBSk  BSKNMMBSk    bskdNBSkBSk      BSk    dNMm    dNNBSkBSkd 
+# BERSHKAdmNBSK     dBSK    dNMm   bskNBSk   BSK    dNN    bskNd    BSK     BSk   NMNd    dMNd    dBSK
+# BERSHKAKNBSkd     NMm      bsk   bskN      BSKb          bsk      bsk     BSk BSKm             ddNMm
+# BSK       dNMN    BSKBERNATSBSk  bsk       BSKSERGIk     bsk      bsk     BERSHKAm        dmNBERSHKA
+# BSK         BSK   BSk            bsk           ddmNBSK   bsk      bsk     BERSHKASK     bskNd    NMm
+# BSK        dBSK   NMN        d   bsk               bsk   bsk      bsk     BSK   dBSK    BSk      NMm
+# BSKddddddmNBSk     NMNd   dBSKd  bsk      dBSKd   dNMN   bsk      bsk     BSk    dBSK   BSKd  dmNBSk
+# BSKBSKBSKNmm        dmNBSKMNm    dNN        mBERSHKAd    bsk      dNN     NNd      NNm   mNBSKBSkdNN
+#
+#
+
+Sitemap: https://www.bershka.com/sitemap/sitemap_indice.xml.gz
+ 
+# Bad bots, bad bots
+# Whatcha gonna do, whatcha gonna do
+# When they come for you
+
+User-agent: UbiCrawler
+Disallow: /
+User-agent: DOC
+Disallow: /
+User-agent: Zao
+Disallow: /
+User-agent: sitecheck.internetseer.com
+Disallow: /
+User-agent: Zealbot
+Disallow: /
+User-agent: MSIECrawler
+Disallow: /
+User-agent: SiteSnagger
+Disallow: /
+User-agent: WebStripper
+Disallow: /
+User-agent: WebCopier
+Disallow: /
+User-agent: Fetch
+Disallow: /
+User-agent: Offline Explorer
+Disallow: /
+User-agent: Teleport
+Disallow: /
+User-agent: TeleportPro
+Disallow: /
+User-agent: WebZIP
+Disallow: /
+User-agent: linko
+Disallow: /
+User-agent: HTTrack
+Disallow: /
+User-agent: Microsoft.URL.Control
+Disallow: /
+User-agent: Xenu
+Disallow: /
+User-agent: larbin
+Disallow: /
+User-agent: libwww
+Disallow: /
+User-agent: ZyBORG
+Disallow: /
+User-agent: Download Ninja
+Disallow: /
+User-agent: fast
+Disallow: /
+User-agent: Maxthon
+Disallow: /
+User-agent: CNCDialer
+Disallow: /
+User-agent: MJ12bot
+Disallow: /
+User-agent: proximic
+Disallow: /itxrest
+
+# URLs we don't want to index
+User-agent: *
+Disallow: /*/user-account.html*
+Disallow: /*/user-orders.html*
+Disallow: /*/my-account-returns.html*
+Disallow: /*/ajax-logon.html*
+Disallow: /*/ajax-user-registration.html*
+Disallow: /*/reset-password.html*
+Disallow: /*/checkout.html*
+Disallow: /*/order-confirmation.html*
+Disallow: /webapp/wcs/stores/*/home*
+Disallow: /webapp/wcs/stores/*/CategoryPage*
+Disallow: /webapp/wcs/stores/*/ItxStandardStoreLocatorPage*
+Disallow: /webapp/wcs/stores/*/ProductPage*
+Disallow: /webapp/wcs/stores/mobile/*
+Disallow: /*/q/*
+Disallow: /*?query=*
+Disallow: /*?searchTerm=*
+Disallow: /*?search=*
+Disallow: /*price=*
+Disallow: /*discount=*
+Disallow: /*size=*
+Disallow: /*=*||*
+Disallow: /*sort=*
+Disallow: /*wish-list.html
+Disallow: /*be_sorteo.html*
+Disallow: /*be_sorteo.html*
+Disallow: /integration/
+Disallow: /itxrest/1/marketing/
+Allow: /*/q/*index=1*
+
+# Yandex must crawl only countries where they have presence
+User-agent: Yandex
+Disallow: /
+Disallow: /itxrest
+Allow: /ru/*
+Allow: /ua/*
+Allow: /kz/*
+Allow: /by/*
+Allow: /tr/*
+Allow: /pl/*
+Allow: /ee/*
+Allow: /lv/*
+
+# Disallow secondary languages
+User-agent: *
+Disallow: /dz/en/
+Disallow: /ad/en/
+Disallow: /at/en/
+Disallow: /by/en/
+Disallow: /be/en/
+Disallow: /bg/en/
+Disallow: /co/en/
+Disallow: /cr/en/
+Disallow: /hr/en/
+Disallow: /cz/en/
+Disallow: /dk/en/
+Disallow: /do/en/
+Disallow: /ec/en/
+Disallow: /sv/en/
+Disallow: /es/en/
+Disallow: /ic/en/
+Disallow: /ee/en/
+Disallow: /fi/en/
+Disallow: /fr/en/
+Disallow: /de/en/
+Disallow: /gr/en/
+Disallow: /gt/en/
+Disallow: /hn/en/
+Disallow: /hu/en/
+Disallow: /it/en/
+Disallow: /jp/en/
+Disallow: /kz/en/
+Disallow: /lv/en/
+Disallow: /lt/en/
+Disallow: /lu/en/
+Disallow: /ma/en/
+Disallow: /mx/en/
+Disallow: /nl/en/
+Disallow: /ni/en/
+Disallow: /pa/en/
+Disallow: /pl/en/
+Disallow: /pt/en/
+Disallow: /ro/en/
+Disallow: /ru/en/
+Disallow: /sk/en/
+Disallow: /si/en/
+Disallow: /se/en/
+Disallow: /ch/en/
+Disallow: /tr/en/
+Disallow: /ve/en/
+Disallow: /ww/es/
+Disallow: /ma/es/
+Disallow: /ad/fr/
+Disallow: /ww/fr/
+Disallow: /eg/fr/
+Disallow: /lb/fr/
+Disallow: /om/fr/
+Disallow: /ch/fr/
+Disallow: /ad/ca/
+Disallow: /ww/pt/
+Disallow: /ii/
+
+# Disallow some countries
+Disallow: /ic/
+Disallow: /ru/
+Disallow: /cn/
+Disallow: /xx/
+Disallow: /xy/
+
+# Disallow bsk teen
+Disallow: /*/bsk-teen/*
+
+# Disallow PDP in countries where we don't sell
+User-agent: *
+Disallow: /az/*-c0*p*.html
+Disallow: /az/*-c1*p*.html
+Disallow: /bh/*-c0*p*.html
+Disallow: /bh/*-c1*p*.html
+Disallow: /by/*-c0*p*.html
+Disallow: /by/*-c1*p*.html
+Disallow: /cr/*-c0*p*.html
+Disallow: /cr/*-c1*p*.html
+Disallow: /cy/*-c0*p*.html
+Disallow: /cy/*-c1*p*.html
+Disallow: /do/*-c0*p*.html
+Disallow: /do/*-c1*p*.html
+Disallow: /ec/*-c0*p*.html
+Disallow: /ec/*-c1*p*.html
+Disallow: /gt/*-c0*p*.html
+Disallow: /gt/*-c1*p*.html
+Disallow: /hk/*-c0*p*.html
+Disallow: /hk/*-c1*p*.html
+Disallow: /hn/*-c0*p*.html
+Disallow: /hn/*-c1*p*.html
+Disallow: /kz/*-c0*p*.html
+Disallow: /kz/*-c1*p*.html
+Disallow: /me/*-c0*p*.html
+Disallow: /me/*-c1*p*.html
+Disallow: /mk/*-c0*p*.html
+Disallow: /mk/*-c1*p*.html
+Disallow: /mo/*-c0*p*.html
+Disallow: /mo/*-c1*p*.html
+Disallow: /my/*-c0*p*.html
+Disallow: /my/*-c1*p*.html
+Disallow: /ni/*-c0*p*.html
+Disallow: /ni/*-c1*p*.html
+Disallow: /om/*-c0*p*.html
+Disallow: /om/*-c1*p*.html
+Disallow: /pa/*-c0*p*.html
+Disallow: /pa/*-c1*p*.html
+Disallow: /ph/*-c0*p*.html
+Disallow: /ph/*-c1*p*.html
+Disallow: /sg/*-c0*p*.html
+Disallow: /sg/*-c1*p*.html
+Disallow: /sv/*-c0*p*.html
+Disallow: /sv/*-c1*p*.html
+Disallow: /th/*-c0*p*.html
+Disallow: /th/*-c1*p*.html
+Disallow: /tw/*-c0*p*.html
+Disallow: /tw/*-c1*p*.html
+Disallow: /ve/*-c0*p*.html
+Disallow: /ve/*-c1*p*.html
+Disallow: /xk/*-c0*p*.html
+Disallow: /xk/*-c1*p*.html

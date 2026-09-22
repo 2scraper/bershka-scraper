@@ -65,6 +65,7 @@ import gzip
 import json
 import logging
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -236,7 +237,27 @@ def is_interstitial(html: str) -> bool:
 # `?search=`, `price=`, `discount=`, `size=`, `sort=`). Nothing in this repo
 # builds such a URL.
 
-_ROBOTS_SNAPSHOT = Path(__file__).resolve().parent / "robots.snapshot.txt"
+def _find_robots_snapshot() -> Path:
+    """Where the shipped snapshot actually is, in each way this can be run.
+
+    A flat `py-modules` project has no package directory to hang package-data
+    off, so the wheel carries the file through `[tool.setuptools.data-files]`
+    — which installs it under `sys.prefix`, NOT next to the module. Looking
+    only beside `__file__` is what made an installed wheel enforce 0 rules
+    (measured 2026-09-22). Both locations are checked, in the order that puts
+    a checkout first.
+    """
+    here = Path(__file__).resolve().parent / "robots.snapshot.txt"
+    candidates = [here,
+                  Path(sys.prefix) / "robots.snapshot.txt",
+                  Path(sys.base_prefix) / "robots.snapshot.txt"]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return here          # the error message names the module-relative path
+
+
+_ROBOTS_SNAPSHOT = _find_robots_snapshot()
 
 
 @dataclass
@@ -329,14 +350,38 @@ def _count_matching_groups(text: str, wanted: str) -> int:
 _CACHED_RULES: Dict[str, RobotsRules] = {}
 
 
+class RobotsSnapshotMissing(RuntimeError):
+    """The shipped robots snapshot is not where the code expects it."""
+
+
 def shipped_robots(agent: str = "*") -> RobotsRules:
-    """The snapshot that travels with the repo.
+    """The snapshot that travels with the package.
 
     A snapshot is a record of what was true on the day it was taken, not a
     licence: `is_robots_allowed()` takes live rules when an engine has them.
+
+    **A missing snapshot raises.** It used to fall back to empty text, and an
+    empty rule set means every URL is allowed — so the one configuration
+    where the file goes missing is also the one where nothing is enforced.
+    Measured 2026-09-22: a built wheel installed outside the checkout had 0
+    rules and called `/ru/` and `/itxrest/1/marketing/` allowed. Failing
+    closed turns that into an install-time error instead of a silent policy
+    change, which is the only safe direction for a file whose absence removes
+    a restriction.
     """
     if agent not in _CACHED_RULES:
-        text = _ROBOTS_SNAPSHOT.read_text(encoding="utf-8") if _ROBOTS_SNAPSHOT.exists() else ""
+        try:
+            text = _ROBOTS_SNAPSHOT.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RobotsSnapshotMissing(
+                f"{_ROBOTS_SNAPSHOT.name} is not next to product_parser.py "
+                f"({_ROBOTS_SNAPSHOT}). It is packaged as data-files in "
+                f"pyproject.toml; an install that drops it would silently "
+                f"allow every URL, so this refuses instead.") from exc
+        if not text.strip():
+            raise RobotsSnapshotMissing(
+                f"{_ROBOTS_SNAPSHOT.name} is empty — an empty rule set allows "
+                f"everything, which is never the intended reading.")
         _CACHED_RULES[agent] = parse_robots(text, agent)
     return _CACHED_RULES[agent]
 

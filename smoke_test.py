@@ -63,6 +63,7 @@ import sys
 import tempfile
 import threading
 from dataclasses import fields
+from pathlib import Path as pathlib_Path
 from typing import Optional
 
 import catalog_walk
@@ -2469,6 +2470,230 @@ def test_challenge_ladder():
     return not _failures
 
 
+def test_failure_handling():
+    group("failures are named, never silent")
+    import catalog_walk
+
+    STORE = json.dumps({"id": 44009506, "countryCode": "GB",
+                        "catalogs": [{"id": 40259534, "type": 1}],
+                        "details": {"imageBaseUrl": "https://x",
+                                    "locale": {"currencyCode": "GBP",
+                                               "currencyDecimals": -2}}})
+    MENU = json.dumps({"items": [
+        {"id": 1, "name": "A", "content": {"id": "grid-A", "type": "grid"}, "children": []},
+        {"id": 2, "name": "B", "content": {"id": "grid-B", "type": "grid"}, "children": []}]})
+    GRID = json.dumps({"productIds": [1, 2], "sortedProductIds": [1, 2],
+                       "gridContext": {"gridId": "g"}})
+
+    def products(n):
+        size = lambda k: {"sku": k, "name": "M", "isBuyable": True,
+                          "backSoon": "0", "price": "2099"}
+        return json.dumps({"products": [
+            {"id": 100 + i, "type": "BundleBean", "bundleProductSummaries": [
+                {"id": 200 + i, "name": f"P{i}", "detail": {"reference": "r", "colors": [
+                    {"id": "1", "name": "Blue",
+                     "sizes": [size(1000 + i * 2), size(1001 + i * 2)]}]}}]}
+            for i in range(n)]})
+
+    base_delay = catalog_walk.RETRY_BASE_DELAY
+    catalog_walk.RETRY_BASE_DELAY = 0.001          # keep the suite quick
+
+    # A failed category used to become an empty one, and the run still said
+    # `completed`. For a price monitor that reads as "those products are
+    # delisted", which is the worst thing this repo could get wrong.
+    for label, status, body in (("a 5xx", 500, b'{"e":1}'),
+                                ("a 429", 429, b'{"e":1}'),
+                                ("HTML at HTTP 200", 200, b"<html>nope</html>")):
+        def fetch(url, status=status, body=body):
+            if "/itxrest/2/catalog/store/" in url:
+                return catalog_walk.Fetched(200, STORE.encode())
+            if "/menu" in url:
+                return catalog_walk.Fetched(200, MENU.encode())
+            if "grid-A" in url:
+                return catalog_walk.Fetched(200, GRID.encode())
+            if "grid-B" in url:
+                return catalog_walk.Fetched(status, body)
+            if "productsArray" in url:
+                return catalog_walk.Fetched(200, products(2).encode())
+            raise AssertionError(url)
+
+        res = catalog_walk.crawl(fetch, 44009506)
+        check(f"{label} on one category does NOT report complete",
+              res.stop_reason not in COMPLETE_STOP_REASONS)
+        check(f"...and is recorded as a failure ({label})", len(res.failures) == 1)
+        check(f"...while the good category's rows survive ({label})",
+              len(res.rows) == 4)
+
+    # A transport failure after a good batch used to escape `crawl`, so the
+    # engine returned an exit code and `finish_run` was never reached: no
+    # JSON, no CSV, no metadata, and the parsed rows gone.
+    state = {"n": 0}
+
+    def flaky(url):
+        if "/itxrest/2/catalog/store/" in url:
+            return catalog_walk.Fetched(200, STORE.encode())
+        if "/menu" in url:
+            return catalog_walk.Fetched(200, MENU.encode())
+        if "/grid/" in url:
+            return catalog_walk.Fetched(200, GRID.encode())
+        if "productsArray" in url:
+            state["n"] += 1
+            if state["n"] == 1:
+                return catalog_walk.Fetched(200, products(2).encode())
+            raise TimeoutError("read timed out")
+        raise AssertionError(url)
+
+    res = catalog_walk.crawl(flaky, 44009506)
+    check("a timeout mid-walk keeps the rows already parsed", len(res.rows) == 4)
+    check("...and never reports complete",
+          res.stop_reason not in COMPLETE_STOP_REASONS)
+    check("...and names the transport failure",
+          any(f["kind"] == "transport_error" for f in res.failures))
+
+    # A run with no failures still reports complete — the check above must
+    # not be satisfied by calling everything partial.
+    def clean(url):
+        if "/itxrest/2/catalog/store/" in url:
+            return catalog_walk.Fetched(200, STORE.encode())
+        if "/menu" in url:
+            return catalog_walk.Fetched(200, MENU.encode())
+        if "/grid/" in url:
+            return catalog_walk.Fetched(200, GRID.encode())
+        if "productsArray" in url:
+            return catalog_walk.Fetched(200, products(2).encode())
+        raise AssertionError(url)
+
+    res = catalog_walk.crawl(clean, 44009506)
+    check("a clean run still reports complete",
+          res.stop_reason in COMPLETE_STOP_REASONS and not res.failures)
+    check("...having fetched both grids", res.grids_fetched == 2)
+    # Both fixture grids serve the same SKUs, and a SKU already written is
+    # dropped rather than duplicated — so four rows, not eight, is the right
+    # answer here and the count is asserted rather than assumed.
+    check("...and deduped the second grid's repeats away", len(res.rows) == 4)
+
+    # Only the transient statuses are retried; a 404 is not a waiting game.
+    attempts = {"n": 0}
+
+    def counted(url):
+        if "/itxrest/2/catalog/store/" in url:
+            attempts["n"] += 1
+            return catalog_walk.Fetched(503, b"{}")
+        raise AssertionError(url)
+
+    res = catalog_walk.crawl(counted, 44009506)
+    check("a 503 is retried, bounded", 1 < attempts["n"] <= catalog_walk.DEFAULT_RETRIES + 1)
+    attempts["n"] = 0
+
+    def notfound(url):
+        if "/itxrest/2/catalog/store/" in url:
+            attempts["n"] += 1
+            return catalog_walk.Fetched(404, b"{}")
+        raise AssertionError(url)
+
+    catalog_walk.crawl(notfound, 44009506)
+    check("a 404 is not retried", attempts["n"] == 1)
+    check("429 and the 5xx range are the retryable set",
+          catalog_walk.RETRYABLE_STATUSES == frozenset({429, 500, 502, 503, 504}))
+
+    catalog_walk.RETRY_BASE_DELAY = base_delay
+    return not _failures
+
+
+def test_proxy_rotation_is_wired():
+    group("the proxy pool is actually used")
+    import api_scraper
+    import requests as _requests
+
+    REFUSAL = ("<HTML><HEAD><TITLE>Service Unavailable</TITLE></HEAD><BODY>"
+               "HTTP Error 403. The service is unavailable.</BODY></HTML>")
+    GOOD = json.dumps({"catalogs": [{"id": 1, "type": 1}], "details": {"locale": {}}})
+    used = []
+
+    class _Response:
+        def __init__(self, status, text):
+            self.status_code, self.text = status, text
+            self.content, self.headers = text.encode(), {}
+
+    class _Session:
+        def __init__(self):
+            self.headers = {}
+        def get(self, url, proxies=None, timeout=None, allow_redirects=None):
+            addr = (proxies or {}).get("https")
+            used.append(addr)
+            return _Response(403, REFUSAL) if addr == "http://a:1" else _Response(200, GOOD)
+        def post(self, *a, **kw):
+            return _Response(200, "{}")
+
+    class _Args:
+        user_agent, timeout, proxy_rotate = "UA", 10, "per-run"
+
+    real = _requests.Session
+    _requests.Session = _Session
+    try:
+        pool = ProxyPool(["http://a:1", "http://b:2"], rotate="per-run")
+        fetch = api_scraper.build_fetch(_Args(), pool)
+        got = fetch("https://www.bershka.com/itxrest/2/catalog/store/44009506")
+        # The pool used to be read once into a closure, so a run that started
+        # on a refused exit stayed there: `--proxy-rotate` was accepted and
+        # did nothing. 4 of 10 exits were refused on 2026-09-20.
+        check("a refused exit is actually left", used == ["http://a:1", "http://b:2"])
+        check("...and the next one answers", got.status == 200)
+        check("the engine exposes the rotation hook", callable(getattr(fetch, "rotate", None)))
+
+        used.clear()
+
+        class _AllBad(_Session):
+            def get(self, url, proxies=None, timeout=None, allow_redirects=None):
+                used.append((proxies or {}).get("https"))
+                return _Response(403, REFUSAL)
+
+        _requests.Session = _AllBad
+        pool = ProxyPool(["http://a:1", "http://b:2"], rotate="per-run")
+        fetch = api_scraper.build_fetch(_Args(), pool)
+        fetch("https://www.bershka.com/itxrest/2/catalog/store/44009506")
+        check("with every exit refused it stops rather than looping",
+              len(used) == 2)
+    finally:
+        _requests.Session = real
+    return not _failures
+
+
+def test_robots_snapshot_travels():
+    group("robots enforcement survives packaging")
+    # A built wheel installed outside the checkout had 0 rules, which made
+    # `/ru/` and `/itxrest/1/marketing/` allowed: the enforcement disappeared
+    # on delivery and nothing said so.
+    pyproject = open(os.path.join(REPO_ROOT, "pyproject.toml"), encoding="utf-8").read()
+    check("the snapshot is declared as packaged data",
+          "robots.snapshot.txt" in pyproject)
+    check("...through data-files, which a flat py-modules project needs",
+          "[tool.setuptools.data-files]" in pyproject)
+    check("the loader looks beyond the module directory",
+          "sys.prefix" in open(os.path.join(REPO_ROOT, "product_parser.py"),
+                               encoding="utf-8").read())
+    check("a missing snapshot is an error, not a licence",
+          hasattr(product_parser, "RobotsSnapshotMissing"))
+
+    # Failing closed, proven rather than asserted from the source.
+    saved = dict(product_parser._CACHED_RULES)
+    saved_path = product_parser._ROBOTS_SNAPSHOT
+    product_parser._CACHED_RULES.clear()
+    product_parser._ROBOTS_SNAPSHOT = pathlib_Path(REPO_ROOT) / "no-such-snapshot.txt"
+    try:
+        raised = _raises_type(product_parser.RobotsSnapshotMissing,
+                              product_parser.shipped_robots, "*")
+        check("...and it raises rather than allowing everything", raised)
+    finally:
+        product_parser._ROBOTS_SNAPSHOT = saved_path
+        product_parser._CACHED_RULES.clear()
+        product_parser._CACHED_RULES.update(saved)
+
+    check("and with the snapshot present the rules are all there",
+          len(product_parser.shipped_robots("*")) == 140)
+    return not _failures
+
+
 def test_output_contract():
     group("row contract")
     names = [f.name for f in fields(Product)]
@@ -2643,6 +2868,9 @@ def main() -> int:
     ok &= test_urls()
     ok &= test_catalog_walk()
     ok &= test_challenge_ladder()
+    ok &= test_failure_handling()
+    ok &= test_proxy_rotation_is_wired()
+    ok &= test_robots_snapshot_travels()
     ok &= test_output_contract()
     ok &= test_writers()
     ok &= test_finish_run()

@@ -82,6 +82,40 @@ jobs:
       - name: Config reporter runs with no .env present
         run: python env_config.py
 
+      - name: The built wheel still enforces robots
+        # The regression this exists for: `py-modules` carries no data files,
+        # so robots.snapshot.txt did not travel and an installed wheel had 0
+        # rules — which made /ru/ and /itxrest/1/marketing/ "allowed". The
+        # enforcement disappeared on delivery and nothing in the checkout
+        # could notice, because in a checkout the file is simply there.
+        #
+        # Installed into its own venv and run from /tmp, so the checkout is
+        # nowhere on sys.path.
+        run: |
+          python -m pip install --quiet build
+          python -m build --wheel
+          python -m venv /tmp/wheelcheck
+          /tmp/wheelcheck/bin/pip install --quiet dist/*.whl
+          cd /tmp
+          /tmp/wheelcheck/bin/python - <<'EOF'
+          import sys
+          import product_parser as P
+          rules = P.shipped_robots("*")
+          print(f"installed wheel: {len(rules)} rules from {P._ROBOTS_SNAPSHOT}")
+          problems = []
+          if len(rules) != 140:
+              problems.append(f"expected 140 merged rules, got {len(rules)}")
+          if P.is_robots_allowed("https://www.bershka.com/ru/women.html", rules):
+              problems.append("/ru/ is allowed — the snapshot did not travel")
+          if P.is_robots_allowed("https://www.bershka.com/itxrest/1/marketing/x", rules):
+              problems.append("/itxrest/1/marketing/ is allowed")
+          if not P.is_robots_allowed("https://www.bershka.com/itxrest/2/catalog/store/1", rules):
+              problems.append("the catalogue API is refused — over-strict")
+          for line in problems:
+              print(f"::error::{line}")
+          sys.exit(1 if problems else 0)
+          EOF
+
       - name: No credentials committed
         # A key pasted into a file during debugging is the one mistake in this
         # repo that cannot be undone by a later commit.

@@ -3,6 +3,51 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] — 2026-09-22
+
+Correctness fixes found by an audit of the v1.0.0 tree. All four were
+reproduced before being fixed, and each has a regression test.
+
+### Fixed
+
+* **A failed request became an empty category, and the run still said
+  `completed`.** `catalog_walk._get` rejected only the edge refusal and
+  handed every other response to the parser, where unparseable JSON became
+  an empty grid. Reproduced on HTTP 500, HTTP 429 and HTML-at-200: each gave
+  `exit 0`, `status=complete` and silently dropped a whole category. For a
+  price monitor that reads as "those products are delisted", which is the
+  worst thing this repo could get wrong.
+
+  Responses are now classified — `HttpError`, `SchemaError`,
+  `TransportError`, `RobotsRefusal`, `EdgeRefusal` — 429 and 5xx get bounded
+  retries with jittered backoff honouring `Retry-After`, every failure is
+  recorded on the result with its URL and status, and a run with any failure
+  reports `requests_failed`, which is not a complete stop reason. It is
+  written as partial and exits 6.
+
+* **A failure after a good batch lost everything collected.** The exception
+  escaped `crawl`, the engine mapped it to an exit code and `finish_run` was
+  never reached — no JSON, no CSV, no metadata. `crawl` now records what
+  stopped it and returns the partial result, so the rows survive and the
+  reason travels with them into `.meta.json`'s `pages_failed`.
+
+* **`--proxy-rotate` was accepted and did nothing.** The exit was read once
+  into a closure; `advance()` was called only in tests. A run that started on
+  one of the 4-in-10 refused exits had no way to reach a working address.
+  Rotation now rebinds the session with the address — cookies issued against
+  one IP must not be replayed from another — is bounded by the size of the
+  pool, and `per-page` rotates at each grid through a hook the walk calls.
+
+* **The robots snapshot did not travel with the wheel.** `py-modules` carries
+  no data files, so an installed wheel had **0 rules** and called `/ru/` and
+  `/itxrest/1/marketing/` allowed: the enforcement disappeared on delivery.
+  The snapshot is packaged now, the loader looks beside the module and under
+  `sys.prefix`, and a missing or empty snapshot raises
+  `RobotsSnapshotMissing` instead of silently permitting everything. Verified
+  by installing the built wheel into a clean venv: 140 rules, `/ru/` refused.
+
+---
+
 ## [1.0.0] — 2026-09-20
 
 First release. Built and measured against `www.bershka.com` on 2026-09-19 and

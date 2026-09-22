@@ -388,6 +388,15 @@ key set against.
 A run that finds nothing writes nothing rather than overwriting a good file
 with `[]`. Pass `--allow-empty` when empty is the expected answer.
 
+**Exit 6 is the one to wire an alert to.** Any request that failed — a 5xx, a
+429 that outlived its retries, a body that was not JSON, a timeout — is
+recorded with its URL and status, and the run reports `requests_failed`
+rather than `completed`. The rows it did collect are still written, so a
+partial run is usable; what it must never be is mistaken for a full one. 429
+and the 5xx range are retried first, bounded, with jittered backoff that
+honours `Retry-After`; a 404 or an application 403 is not retried, because
+the same request later is the same answer.
+
 ---
 
 ## Comparing two runs
@@ -455,7 +464,12 @@ those. This repo's own canary shipped once pointed at one.
 
 **Exit 5 with `SSLError ... Max retries exceeded`.** The connection to the
 site failed rather than the site refusing it — usually the proxy exit
-dropping. Retry on another exit.
+dropping. With a pool configured the engine now leaves that exit by itself.
+
+**Exit 6 and a list of failed URLs.** Some of what you asked for was not
+read. `.meta.json`'s `pages_failed` names them and the run log gives the
+status for each. Do not diff a partial run against a complete one without
+reading that list first.
 
 **HTTP 500 from the Scraping Browser endpoint**, `proxy_timeout` or
 `browser_timeout`. A vendor-side failure, and transient: two failures then a

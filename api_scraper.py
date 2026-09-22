@@ -47,7 +47,7 @@ import argparse
 import json
 import logging
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 import browser_bridge
@@ -70,27 +70,70 @@ DEFAULT_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
 
 
 def build_fetch(args, pool: Optional[proxy_pool.ProxyPool]):
-    """A `fetch(url) -> Fetched` bound to one exit and one session."""
+    """A `fetch(url) -> Fetched` whose session is BOUND to one exit.
+
+    The exit used to be read once and captured in the closure forever, so
+    `--proxy-rotate` was accepted and did nothing and a pool of 55 addresses
+    burned exactly one. That matters here rather than being theoretical: 4 of
+    10 exits were refused outright on 2026-09-20, and a run that starts on one
+    of them had no way to reach a working address.
+
+    Rotating is not just calling `pool.advance()`. The session goes with the
+    address: cookies an edge issued against one IP, replayed from another,
+    are a stronger signal than either address on its own — see
+    `proxy_pool`'s module docstring. So `_rebind()` throws the session away
+    and builds a new one, and every caller of a rotation goes through it.
+
+    Bounded by the size of the pool: with no address left that has not been
+    tried, the failure is raised rather than looped on.
+    """
     try:
         import requests
     except ImportError:  # pragma: no cover - reported, not raised
         raise SystemExit("api_scraper.py needs `requests`: pip install -r requirements.txt")
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": args.user_agent, "Accept": "*/*"})
-    exit_url = pool.current if pool else None
-    proxies = {"http": exit_url, "https": exit_url} if exit_url else None
-    if proxies:
-        logger.info("Exit: %s", proxy_pool.mask(exit_url))
-    else:
+    state: Dict[str, Any] = {"session": None, "exit": None, "tried": set()}
+
+    def _rebind():
+        state["exit"] = pool.current if pool else None
+        session = requests.Session()
+        session.headers.update({"User-Agent": args.user_agent, "Accept": "*/*"})
+        state["session"] = session
+        if state["exit"]:
+            state["tried"].add(state["exit"])
+            logger.info("Exit: %s", proxy_pool.mask(state["exit"]))
+
+    _rebind()
+    if not state["exit"]:
         logger.warning(
             "No proxy configured. Measured 2026-09-19, this host answers 403 "
             "to every request from a residential address, robots.txt "
             "included. Set BERSHKA_PROXY in .env or pass --proxy-file.")
 
-    def get(url: str):
-        return session.get(url, proxies=proxies, timeout=args.timeout,
-                           allow_redirects=True)
+    def rotate(reason: str) -> bool:
+        """Move to an exit this run has not used. False when there is none."""
+        if pool is None or len(pool) < 2:
+            return False
+        for _ in range(len(pool)):
+            pool.advance(reason)
+            if pool.current not in state["tried"]:
+                logger.warning("rotating exit after %s -> %s", reason,
+                               proxy_pool.mask(pool.current))
+                _rebind()
+                return True
+        logger.warning("every exit in the pool has been tried; not rotating again")
+        return False
+
+    def _once(url: str) -> Fetched:
+        exit_url = state["exit"]
+        proxies = {"http": exit_url, "https": exit_url} if exit_url else None
+        response = state["session"].get(url, proxies=proxies,
+                                        timeout=args.timeout, allow_redirects=True)
+        if P.is_self_clearing_challenge(response.text) and clear_interstitial(response, url):
+            response = state["session"].get(url, proxies=proxies,
+                                            timeout=args.timeout, allow_redirects=True)
+        return Fetched(status=response.status_code, body=response.content,
+                       headers=dict(response.headers))
 
     def clear_interstitial(response, url: str) -> bool:
         """Answer the shim's arithmetic over plain HTTP. True if accepted.
@@ -102,19 +145,17 @@ def build_fetch(args, pool: Optional[proxy_pool.ProxyPool]):
         shim all three times, so retrying without answering it is a loop.
 
         The catalogue API is not gated by it, which is why this engine
-        normally never meets one: it goes straight to the API. The storefront
-        is only fetched to resolve a store id for a locale that has none
-        measured, and before this existed that path failed with "could not
-        read a store id out of … (HTTP 200)" — a message that reads like the
-        page changed when it was a challenge nobody had answered.
+        normally never meets one: it goes straight to the API.
         """
         payload = P.parse_interstitial(response.text)
         if not payload:
             return False
         origin = f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
+        exit_url = state["exit"]
+        proxies = {"http": exit_url, "https": exit_url} if exit_url else None
         logger.info("self-clearing interstitial on %s — answering it", url)
         try:
-            verified = session.post(
+            verified = state["session"].post(
                 origin + P.INTERSTITIAL_VERIFY_PATH,
                 data=json.dumps(payload),
                 headers={"Content-Type": "application/json", "Referer": url,
@@ -129,15 +170,15 @@ def build_fetch(args, pool: Optional[proxy_pool.ProxyPool]):
         return verified.status_code == 200
 
     def fetch(url: str) -> Fetched:
-        response = get(url)
-        # One answer, one retry. A shim that survives being answered is not
-        # going to fall to a second attempt, and looping here would post the
-        # same arithmetic forever.
-        if P.is_self_clearing_challenge(response.text) and clear_interstitial(response, url):
-            response = get(url)
-        return Fetched(status=response.status_code, body=response.content,
-                       headers=dict(response.headers))
+        got = _once(url)
+        # An address that is refused stays refused; the pool exists for
+        # exactly this, and rotating is the only thing that can help.
+        if P.is_edge_refusal(got.status, got.text[:4000], got.headers):
+            if rotate(f"edge refusal on {url}"):
+                got = _once(url)
+        return got
 
+    fetch.rotate = rotate          # so per-page rotation can reach it
     return fetch
 
 
@@ -217,9 +258,12 @@ def scrape(args) -> int:
         if args.mode == "product":
             result = run_product_mode(args, fetch, store)
         else:
+            on_grid = (lambda: fetch.rotate("per-page rotation")) \
+                if args.proxy_rotate == "per-page" else None
             result = crawl(fetch, store.store_id, category=args.category,
                            locale=args.site_locale, max_grids=args.max_grids,
-                           max_products=args.max_products, delay=args.delay)
+                           max_products=args.max_products, delay=args.delay,
+                           on_grid=on_grid)
     except RobotsRefusal as exc:
         print(f"[!] {exc}")
         return EXIT_BLOCKED
@@ -237,6 +281,7 @@ def scrape(args) -> int:
         blocked=False, stop_reason=result.stop_reason,
         pages_requested=result.grids_seen or 1,
         pages_completed=result.grids_fetched or 1,
+        pages_failed=[f["url"] for f in result.failures] or None,
         start_url=start_url, final_url=P.BASE, mode=args.mode)
 
 
@@ -256,6 +301,16 @@ def _report(result: WalkResult) -> None:
         keys = {e.get("key") for e in result.payload_errors}
         print(f"[!] {len(result.payload_errors)} payload error(s) inside HTTP 200: "
               f"{', '.join(sorted(k for k in keys if k))}")
+    # Loud, and above the row count in importance: a run with failures has
+    # holes in it, and a monitor that reads the rows without reading this
+    # will see the missing products as delisted.
+    for failure in result.failures:
+        print(f"[!] {failure['kind']}"
+              f"{' ' + str(failure['status']) if failure['status'] else ''}: "
+              f"{failure['detail'][:150]}")
+    if result.failures:
+        print(f"[!] {len(result.failures)} request(s) failed — this run is NOT a "
+              f"complete view of what was asked for.")
 
 
 def parse_args():

@@ -166,6 +166,7 @@ def scrape(args) -> int:
         blocked=False, stop_reason=result.stop_reason,
         pages_requested=result.grids_seen or 1,
         pages_completed=result.grids_fetched or 1,
+        pages_failed=[f["url"] for f in result.failures] or None,
         start_url=start_url, final_url=P.BASE, mode=args.mode)
 
 

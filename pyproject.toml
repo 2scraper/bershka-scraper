@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bershka-scraper"
-version = "1.0.0"
+version = "1.0.1"
 description = "Bershka catalogue scraper: product, colour, size, price and availability from bershka.com, one row per SKU, as JSON and CSV."
 readme = "README.md"
 license = "MIT"
@@ -42,6 +42,7 @@ dev = ["pytest>=7.0"]
 # top-level modules. smoke_test.py is excluded on purpose: it is a runner
 # invoked as a script (see CONTRIBUTING.md), not a module an installed
 # dependency would import.
+# py-modules alone does not carry data files; see [tool.setuptools.data-files].
 py-modules = [
     "api_scraper",
     "browser_bridge",
@@ -60,6 +61,14 @@ py-modules = [
     "selenium_scraper",
 ]
 license-files = ["LICENSE"]
+
+# robots.snapshot.txt is DATA THE CODE ENFORCES, not documentation, so it has
+# to travel with the wheel. It did not: measured 2026-09-22, a built wheel
+# installed outside the checkout left `product_parser.shipped_robots()` with
+# **0 rules**, which made `/ru/` and `/itxrest/1/marketing/` both "allowed".
+# The robots enforcement disappeared on delivery and nothing said so.
+[tool.setuptools.data-files]
+"." = ["robots.snapshot.txt"]
 
 [tool.pytest.ini_options]
 # smoke_test.py is a self-contained runner, not a pytest suite (see

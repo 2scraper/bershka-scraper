@@ -39,7 +39,10 @@ Columns that are NOT here, and the measurements that removed them
 """
 
 import csv
+import hashlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass, asdict, field, fields
 from datetime import datetime, timezone
 from typing import Optional, List, Set, Sequence, Any, Type
@@ -133,6 +136,11 @@ class Product:
     # site's own list and does not depend on the order a walk happened to
     # take. Measured 2026-09-19: one dress carried 3 of them.
     related_categories: Optional[List[str]] = None
+    # Every menu trail this run reached the SKU through, not just the first.
+    # `category` is the first and is kept as-is so the column's meaning does
+    # not change under anyone reading it; this is the honest answer to "which
+    # categories is it in", which a single value cannot give.
+    categories: Optional[List[str]] = None
     country_of_origin: Optional[str] = None  # sizes[].country
     page: Optional[int] = None
     row_index: Optional[int] = None
@@ -188,9 +196,33 @@ def _csv_value(v: Any) -> Any:
     return v
 
 
+def _atomic(path: str, write: Any) -> None:
+    """Write through a temporary file in the same directory, then replace.
+
+    The three outputs used to be written straight to their final names, so a
+    failure between them — a full disk, an interrupt — left a fresh JSON
+    beside yesterday's CSV and a metadata sidecar describing neither. Nothing
+    downstream could tell. `os.replace` is atomic on the same filesystem, so
+    a reader sees either the old file or the new one.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="",
+                                         dir=directory, delete=False)
+    try:
+        with handle:
+            write(handle)
+        os.replace(handle.name, path)
+    except BaseException:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+        raise
+
+
 def write_json(rows: Sequence[Any], path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump([asdict(r) for r in rows], f, ensure_ascii=False, indent=2)
+    _atomic(path, lambda f: json.dump([asdict(r) for r in rows], f,
+                                      ensure_ascii=False, indent=2))
 
 
 def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> None:
@@ -198,11 +230,14 @@ def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> None:
     # the first row, so a mode that finds nothing still writes the columns
     # that mode would have used.
     fieldnames = [f.name for f in fields(row_cls)]
-    with open(path, "w", encoding="utf-8", newline="") as f:
+
+    def _write(f):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
             writer.writerow({k: _csv_value(v) for k, v in asdict(r).items()})
+
+    _atomic(path, _write)
 
 
 # Exit code used when a run completes but produced nothing.
@@ -246,20 +281,60 @@ class RemoteAPIError(RuntimeError):
 
 
 def write_run_meta(out_prefix: str, meta: dict) -> str:
-    """Write a run-metadata sidecar next to the output, return its path."""
+    """Write a run-metadata sidecar next to the output, return its path.
+
+    Written LAST and atomically, so the sidecar is the commit point: if it is
+    there, the JSON and CSV beside it are the ones it describes.
+    """
     path = f"{out_prefix}.meta.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    _atomic(path, lambda f: json.dump(meta, f, ensure_ascii=False, indent=2))
     print(f"[+] Wrote run metadata -> {path} (status={meta.get('status')})")
     return path
+
+
+def schema_version() -> str:
+    """A short fingerprint of the row schema, so a diff can refuse to compare
+    a run written before a column changed with one written after."""
+    names = ",".join(f.name for f in fields(Product))
+    return hashlib.sha256(names.encode()).hexdigest()[:12]
+
+
+def scope_fingerprint(store_id: Optional[int] = None, locale: Optional[str] = None,
+                      category: Optional[str] = None,
+                      grid_ids: Optional[Sequence[str]] = None,
+                      max_grids: Optional[int] = None,
+                      max_skus: Optional[int] = None) -> dict:
+    """What a run actually covered, in the fields a diff must agree on.
+
+    Without this, `diff_runs.py` compared only status and mode — so two
+    complete runs of the SAME sku in `gb`/GBP and `de`/EUR were considered
+    comparable and every row looked like a price change. The currency change
+    would be reported, but the tool did nothing to stop the false alert, and
+    the metadata did not even carry the market.
+
+    `grids` is a hash rather than the list: a run over 400 grids should not
+    put 400 ids in a sidecar, and the only question a diff asks of it is
+    whether the two runs covered the same set.
+    """
+    ids = sorted(str(g) for g in (grid_ids or []))
+    digest = hashlib.sha256("|".join(ids).encode()).hexdigest()[:12] if ids else None
+    return {
+        "store_id": store_id,
+        "locale": locale,
+        "category": category,
+        "grids": {"count": len(ids), "digest": digest},
+        "max_grids": max_grids,
+        "max_skus": max_skus,
+        "schema_version": schema_version(),
+    }
 
 
 def run_meta(status: str, stop_reason: str, pages_requested: int,
              pages_completed: int, start_url: str, final_url: str,
              products: int, pages_failed: Optional[List[int]] = None,
-             mode: str = "category", source: str = SOURCE_DEFAULT) -> dict:
-    """Build the metadata dict for a finished run. See mediamarkt-scraper's
-    output_writer.py for the full rationale; unchanged here."""
+             mode: str = "category", source: str = SOURCE_DEFAULT,
+             scope: Optional[dict] = None) -> dict:
+    """Build the metadata dict for a finished run."""
     return {
         "source": source,
         "mode": mode,
@@ -269,6 +344,7 @@ def run_meta(status: str, stop_reason: str, pages_requested: int,
         "pages_completed": pages_completed,
         "pages_failed": pages_failed or [],
         "products": products,
+        "scope": scope if scope is not None else scope_fingerprint(),
         "start_url": start_url,
         "final_url": final_url,
         "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -308,7 +384,8 @@ def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
                pages_requested: int, pages_completed: int,
                start_url: str, final_url: str,
                pages_failed: Optional[List[int]] = None,
-               mode: str = "category", source: str = SOURCE_DEFAULT) -> int:
+               mode: str = "category", source: str = SOURCE_DEFAULT,
+               scope: Optional[dict] = None) -> int:
     """Write output + the run-metadata sidecar; return the exit code.
 
     Shared by all three browser engines so the status/exit-code mapping
@@ -326,7 +403,7 @@ def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
         write_run_meta(out_prefix, run_meta(
             status=status, stop_reason=stop_reason,
             pages_requested=pages_requested, pages_completed=pages_completed,
-            pages_failed=pages_failed, mode=mode, source=source,
+            pages_failed=pages_failed, mode=mode, source=source, scope=scope,
             start_url=start_url, final_url=final_url, products=len(rows)))
 
     if not rows:

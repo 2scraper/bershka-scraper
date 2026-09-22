@@ -56,7 +56,7 @@ import product_parser as P
 import proxy_pool
 from catalog_walk import EdgeRefusal, Fetched, RobotsRefusal, WalkResult, crawl, load_store
 from output_writer import (EXIT_BLOCKED, EXIT_REMOTE_API_ERROR, Product,
-                           finish_run)
+                           finish_run, scope_fingerprint)
 
 logger = logging.getLogger("api_scraper")
 
@@ -262,8 +262,8 @@ def scrape(args) -> int:
                 if args.proxy_rotate == "per-page" else None
             result = crawl(fetch, store.store_id, category=args.category,
                            locale=args.site_locale, max_grids=args.max_grids,
-                           max_products=args.max_products, delay=args.delay,
-                           on_grid=on_grid)
+                           max_skus=args.max_skus, delay=args.delay,
+                           on_grid=on_grid, store=store)
     except RobotsRefusal as exc:
         print(f"[!] {exc}")
         return EXIT_BLOCKED
@@ -282,6 +282,11 @@ def scrape(args) -> int:
         pages_requested=result.grids_seen or 1,
         pages_completed=result.grids_fetched or 1,
         pages_failed=[f["url"] for f in result.failures] or None,
+        scope=scope_fingerprint(
+            store_id=result.store.store_id if result.store else None,
+            locale=args.site_locale, category=args.category,
+            grid_ids=result.grid_ids, max_grids=args.max_grids,
+            max_skus=args.max_skus),
         start_url=start_url, final_url=P.BASE, mode=args.mode)
 
 

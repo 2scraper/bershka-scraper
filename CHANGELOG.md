@@ -3,6 +3,58 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] — 2026-09-22
+
+The rest of the audit: both P2 findings and the code notes worth acting on.
+
+### Fixed
+
+* **A diff would compare two different markets.** `_check_comparable`
+  checked status and mode; the metadata did not even carry the store or the
+  locale, so two complete runs of the same SKU in `gb`/GBP and `de`/EUR were
+  considered comparable and every row read as a price change. Runs now carry
+  a scope — store, locale, category, a digest of the grids actually walked,
+  the limits and a schema version — and a diff refuses a mismatch, naming
+  which field differs. `--force` compares anyway, knowingly. A run with no
+  scope recorded is reported as unknown rather than waved through.
+
+* **A bundle's owner was only stable within one batch.** The lowest entry id
+  was resolved per payload, so the same bundle reached from a lower entry in
+  a later batch kept whichever arrived first: `product_id` and `url` moved
+  with batch order, and any downstream join moved with them. The owner map
+  now spans the whole run and a canonicalising pass runs after everything is
+  read, so the answer cannot depend on order.
+
+### Added
+
+* **`categories`**, every menu trail that lists a SKU, sorted. `category`
+  still holds the first for compatibility. Measured on a three-grid run: 687
+  of 1,907 rows belong to more than one category, which a single value could
+  not say.
+* **A product-id cache across grids.** Deduplication happened after the
+  payload arrived, so a product listed by four grids was downloaded four
+  times at roughly 25 KB each. The same three-grid run now requests 133
+  products instead of 162 and reads 18.47 MiB instead of 23.07 — the same
+  1,907 rows. Category membership is collected from the grids' id lists
+  rather than from the fetches, so nothing is lost by not re-downloading.
+* **Atomic output.** JSON, CSV and the metadata sidecar are written through a
+  temporary file and replaced, and the sidecar is written last — so it is the
+  commit point and a reader never sees a fresh JSON beside yesterday's CSV.
+
+### Changed
+
+* **`--max-products` is now `--max-skus`.** It always counted rows, and a row
+  is a SKU: one dress in 4 colours and 8 sizes is 32 of them. The old
+  spelling still works. The stop reason is `max_skus_reached`.
+* **The Docker image runs `api_scraper.py`**, the primary engine on this
+  site, instead of Playwright — and the stale `--mode market-values --pages`
+  example a sibling repo left behind is gone.
+* The store config is read once. `api_scraper.resolve_store` already had it
+  and `crawl` fetched it again, in a request that was not even counted in
+  the run's own tally.
+
+---
+
 ## [1.0.1] — 2026-09-22
 
 Correctness fixes found by an audit of the v1.0.0 tree. All four were

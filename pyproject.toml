@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bershka-scraper"
-version = "1.0.1"
+version = "1.0.2"
 description = "Bershka catalogue scraper: product, colour, size, price and availability from bershka.com, one row per SKU, as JSON and CSV."
 readme = "README.md"
 license = "MIT"

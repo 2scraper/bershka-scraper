@@ -7,7 +7,19 @@
   "pages_completed": 1,
   "pages_failed": [],
   "products": 131,
+  "scope": {
+    "store_id": 44009506,
+    "locale": "gb",
+    "category": "WOMEN / SALE / Bershka / Dresses and jumpsuits",
+    "grids": {
+      "count": 1,
+      "digest": "397cc48cbfd1"
+    },
+    "max_grids": null,
+    "max_skus": null,
+    "schema_version": "f801035c7788"
+  },
   "start_url": "https://www.bershka.com",
   "final_url": "https://www.bershka.com",
-  "finished_at": "2026-09-20T13:19:08.561592+00:00"
+  "finished_at": "2026-09-22T08:26:56.752139+00:00"
 }

@@ -80,6 +80,10 @@ python3 playwright_scraper.py --category "WOMEN / Clothes / Jeans" --max-grids 1
 python3 playwright_scraper.py --cdp-endpoint "$BERSHKA_CDP_ENDPOINT" \
     --category "WOMEN / Clothes / Jeans" --max-grids 1
 
+# Bound the rows rather than the grids. A row is one SKU, so this is not a
+# product count — `--max-products` still works as the old spelling.
+python3 api_scraper.py --category "WOMEN / Clothes" --max-skus 500
+
 # Write only CSV, and accept an empty result as the answer
 python3 api_scraper.py --category "MEN / Clothes / Polos" --format csv --allow-empty
 ```
@@ -184,6 +188,7 @@ rather than a product. The 131 rows above are 86 products.
 | `availability` | `InStock` / `OutOfStock` / `BackSoon` | folded from `isBuyable` and `backSoon` |
 | `url` | `…/gb/lace-strap-midi-dress-c0p229723104.html` | the product page, not the SKU |
 | `related_categories` | `["Dresses and Jumpsuits", "Long"]` | the site's own list; 99 of 131 rows carried one |
+| `categories` | `["WOMEN / SALE / Bershka", "… / Trousers and jeans"]` | every menu trail that lists the SKU; 687 of 1,907 rows had more than one |
 
 The first ten columns are this family's shared prefix and keep their order.
 Everything after them is Bershka's business; `output_writer.py`'s `Product`
@@ -405,6 +410,13 @@ the same request later is the same answer.
 python3 diff_runs.py yesterday.json today.json
 ```
 
+**It refuses two runs that did not cover the same ground.** Each run records
+a scope — store, locale, category, a digest of the grids actually walked, the
+limits and a schema version — and a mismatch is reported rather than diffed:
+two complete runs of the same SKU in `gb`/GBP and `de`/EUR are two markets,
+not a price change. `--force` compares them anyway, knowingly. A run with no
+scope recorded is reported as unknown rather than assumed to match.
+
 Matches on `sku` and reports added, removed and changed rows. It compares
 `price`, `currency`, `original_price`, `discount_pct`, `availability`,
 `title`, `is_buyable`, `back_soon` and `promotion_id` — not `row_index` or
@@ -421,8 +433,11 @@ docker build -t bershka-scraper .
 docker run --rm --env-file .env bershka-scraper --category "WOMEN / Clothes / Jeans"
 ```
 
-The image runs the Playwright engine. CI builds it on every push, because
-nothing else in a repo like this ever would.
+The image runs `api_scraper.py`, the primary engine here, so it is a
+`requests` install rather than a Chromium download. The browser engines are
+in it too and reachable with `--entrypoint`, but it deliberately carries no
+browser for them. CI builds the image on every push, because nothing else in
+a repo like this ever would.
 
 ---
 

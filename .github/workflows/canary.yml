@@ -103,8 +103,8 @@ jobs:
         #     enough that a collapse trips `--run-check`'s row floor, small
         #     enough to run daily on paid bandwidth.
         #
-        # NO `--max-products`: capping rows stops the walk early and the run
-        # reports `partial` with stop_reason `max_products_reached`, which
+        # NO `--max-skus`: capping rows stops the walk early and the run
+        # reports `partial` with stop_reason `max_skus_reached`, which
         # this workflow correctly treats as a failure. Bound the work by
         # choosing the grid, not by truncating its output.
         #

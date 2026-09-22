@@ -359,7 +359,8 @@ def run(args, driver) -> int:
     `evaluate(js, arg)`, `sleep(ms)` and `stop()`.
     """
     import catalog_walk
-    from output_writer import EXIT_BLOCKED, EXIT_REMOTE_API_ERROR, finish_run
+    from output_writer import (EXIT_BLOCKED, EXIT_REMOTE_API_ERROR, finish_run,
+                           scope_fingerprint)
 
     start_url = f"{P.BASE}/{args.site_locale}/"
     try:
@@ -385,7 +386,7 @@ def run(args, driver) -> int:
             result = catalog_walk.crawl(
                 fetch, int(blob["store_id"]), category=args.category,
                 locale=args.site_locale, max_grids=args.max_grids,
-                max_products=args.max_products, delay=args.delay)
+                max_skus=args.max_skus, delay=args.delay)
     except catalog_walk.RobotsRefusal as exc:
         print(f"[!] {exc}")
         return EXIT_BLOCKED
@@ -409,6 +410,11 @@ def run(args, driver) -> int:
         pages_requested=result.grids_seen or 1,
         pages_completed=result.grids_fetched or 1,
         pages_failed=[f["url"] for f in result.failures] or None,
+        scope=scope_fingerprint(
+            store_id=result.store.store_id if result.store else None,
+            locale=args.site_locale, category=args.category,
+            grid_ids=result.grid_ids, max_grids=args.max_grids,
+            max_skus=args.max_skus),
         start_url=start_url, final_url=P.BASE, mode=args.mode)
 
 
@@ -427,9 +433,16 @@ def add_core_arguments(p, default_out: str):
                         "carries, NOT a sku.")
     p.add_argument("--site-locale", default=P.DEFAULT_LOCALE)
     p.add_argument("--max-grids", type=int, default=None)
-    p.add_argument("--max-products", type=int, default=None,
-                   help="Stop once this many rows exist. Rows are per SKU, so "
-                        "one dress in 4 colours and 8 sizes is 32 of them.")
+    # `--max-products` counted ROWS, and a row is a SKU: one dress in 4
+    # colours and 8 sizes is 32 of them. The help said so and the name still
+    # misled, which is a bad trade. The old spelling keeps working so nothing
+    # that already uses it breaks.
+    p.add_argument("--max-skus", "--max-products", type=int, default=None,
+                   dest="max_skus",
+                   help="Stop once this many ROWS exist. A row is one SKU — "
+                        "a (product, colour, size) triple — so one dress in 4 "
+                        "colours and 8 sizes is 32 of them. To bound the work "
+                        "by products, choose fewer grids with --max-grids.")
     p.add_argument("--delay", type=float, default=0.5)
     p.add_argument("--timeout", type=int, default=60)
     p.add_argument("--format", choices=["json", "csv", "both"], default="both")

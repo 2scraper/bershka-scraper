@@ -4,8 +4,8 @@
 # there).
 #
 #   docker build -t bershka-scraper .
-#   docker run --rm -v "$PWD/out:/out" bershka-scraper \
-#     --mode market-values --pages 2 --out /out/market_values
+#   docker run --rm --env-file .env -v "$PWD/out:/out" bershka-scraper \
+#     --category "WOMEN / Accessories / Bags and purses" --out /out/bags
 #
 # Pass --proxy/--twocaptcha-key the same way as running locally, or mount a
 # .env at /app/.env -- nothing here bakes in a credential.
@@ -30,5 +30,10 @@ COPY api_scraper.py browser_bridge.py captcha_solver.py catalog_walk.py \
      page_flow.py playwright_scraper.py product_parser.py proxy_pool.py \
      robots.snapshot.txt ./
 
-ENTRYPOINT ["python3", "playwright_scraper.py"]
+# The HTTP engine, not a browser: it is the primary one on this site (a
+# rendered listing carries no products at all), and the image is then a
+# `requests` install rather than a Chromium download. The browser engines are
+# in the image too — `--entrypoint python3 … playwright_scraper.py` reaches
+# them — but they need a browser this image deliberately does not carry.
+ENTRYPOINT ["python3", "api_scraper.py"]
 CMD ["--help"]

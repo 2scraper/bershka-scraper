@@ -181,6 +181,54 @@ def _run_status(path: str):
     return meta.get("status"), meta
 
 
+# What two runs must agree on before a row-level diff means anything.
+# Comparing a `gb`/GBP run with a `de`/EUR one used to be allowed: the same
+# SKUs, every price different, and the tool reported it as change over time
+# rather than as two markets. Each key here is checked independently so the
+# message can say WHICH one differs.
+SCOPE_KEYS = ("store_id", "locale", "category", "max_grids", "max_skus",
+              "schema_version")
+
+
+def _scope_problems(args) -> List[str]:
+    """Refuse a diff across markets, categories or schema versions.
+
+    Missing scope means the run predates this metadata; that is reported as
+    unknown rather than waved through, because "no scope recorded" and "same
+    scope" are not the same statement.
+    """
+    if getattr(args, "force", False):
+        return []
+    scopes = {}
+    for label, path in (("--old", args.old), ("--new", args.new)):
+        _, meta = _run_status(path)
+        scopes[label] = ((meta or {}).get("scope") or None)
+
+    if scopes["--old"] is None or scopes["--new"] is None:
+        missing = [l for l, s in scopes.items() if s is None]
+        return [f"{' and '.join(missing)} carr{'y' if len(missing) > 1 else 'ies'} "
+                f"no scope in its metadata, so this tool cannot tell whether "
+                f"the two runs covered the same market and categories. Re-run "
+                f"with a current version, or pass --force if you know they "
+                f"match."]
+
+    out = []
+    for key in SCOPE_KEYS:
+        old, new = scopes["--old"].get(key), scopes["--new"].get(key)
+        if old != new:
+            out.append(f"the runs differ in {key}: {old!r} against {new!r}")
+    old_grids = (scopes["--old"].get("grids") or {})
+    new_grids = (scopes["--new"].get("grids") or {})
+    if old_grids.get("digest") != new_grids.get("digest"):
+        out.append(
+            f"the runs covered different grids ({old_grids.get('count')} against "
+            f"{new_grids.get('count')}, different contents). Rows present in one "
+            f"and absent from the other would read as delisted products.")
+    if out:
+        out.append("Pass --force to compare them anyway, knowingly.")
+    return out
+
+
 def _check_comparable(args) -> bool:
     """Refuse a diff between runs that are not both complete, or that are
     different modes. See mediamarkt-scraper's diff_runs.py for the full
@@ -207,10 +255,10 @@ def _check_comparable(args) -> bool:
                 f"page(s), reason {meta.get('stop_reason')!r}")
     if len(set(modes.values())) > 1:
         problems.append(
-            f"the two runs are different modes ({modes}). A category "
-            f"row and a transfer row carry different fields, so "
-            f"added/removed would describe the mode change rather than the "
-            f"data.")
+            f"the two runs are different modes ({modes}), so added/removed "
+            f"would describe the mode change rather than the data.")
+
+    problems += _scope_problems(args)
     if not problems:
         return True
 
@@ -235,7 +283,9 @@ def parse_args():
                         "for a cron job that should only notify on a real diff.")
     p.add_argument("--force", action="store_true",
                    help="Diff even when a run's .meta.json says it was "
-                        "partial or failed, or the modes differ.")
+                        "partial or failed, the modes differ, or the two runs "
+                        "covered different markets, categories or schema "
+                        "versions. Deliberate, not a default.")
     return p.parse_args()
 
 

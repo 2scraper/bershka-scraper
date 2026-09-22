@@ -110,6 +110,10 @@ class WalkResult:
     store: Optional[P.StoreConfig] = None
     grids_seen: int = 0
     grids_fetched: int = 0
+    # The grids this run actually read, for the scope fingerprint a diff
+    # compares. Ids, not names: a menu label can be translated or renamed
+    # without the grid changing.
+    grid_ids: List[str] = field(default_factory=list)
     products_requested: int = 0
     payload_errors: List[Dict[str, Any]] = field(default_factory=list)
     duplicate_bundles: int = 0
@@ -276,7 +280,7 @@ def select_grids(grids: Sequence[P.MenuGrid], category: Optional[str] = None,
 
 def walk_grids(fetch: Callable[[str], Fetched], store: P.StoreConfig,
                grids: Sequence[P.MenuGrid], locale: str = P.DEFAULT_LOCALE,
-               delay: float = 0.0, max_products: Optional[int] = None,
+               delay: float = 0.0, max_skus: Optional[int] = None,
                rules: Optional[P.RobotsRules] = None,
                result: Optional[WalkResult] = None,
                on_grid: Optional[Callable[[], None]] = None) -> WalkResult:
@@ -293,10 +297,28 @@ def walk_grids(fetch: Callable[[str], Fetched], store: P.StoreConfig,
     result.store = store
     result.grids_seen = len(grids)
     seen_sku: set = set()
+    # One map for the whole walk — see parse_products_array's `owners`.
+    owners: Dict[Any, Dict[str, Any]] = {}
+    # Product ids already requested in this run. Deduplication used to happen
+    # AFTER the payload came back, so a product listed in four grids was
+    # downloaded four times — at roughly 25 KB each, on paid bandwidth, to be
+    # thrown away. The ids are known before the request, so the saving is
+    # free; category membership is collected separately in `trails`, which is
+    # why dropping the duplicate fetch loses nothing.
+    fetched_ids: set = set()
+    # Which menu trails list a given PRODUCT ID. Keyed on the id from the
+    # grid's own list rather than on the fetched rows, because the id cache
+    # below deliberately does not re-fetch a product a previous grid already
+    # returned — and membership of the second category is still a fact about
+    # the product. `category` keeps the first trail for compatibility.
+    id_trails: Dict[int, List[str]] = {}
+    # entry id -> bundle, filled while parsing, so a row can be joined back
+    # to every grid that listed any entry pointing at its bundle.
+    bundle_entries: Dict[Any, set] = {}
 
     for grid in grids:
-        if max_products is not None and len(result.rows) >= max_products:
-            result.stop_reason = "max_products_reached"
+        if max_skus is not None and len(result.rows) >= max_skus:
+            result.stop_reason = "max_skus_reached"
             break
         # `--proxy-rotate per-page` means a new exit per grid, and it has to
         # be a hook rather than something the walk does itself: the walk has
@@ -324,6 +346,7 @@ def walk_grids(fetch: Callable[[str], Fetched], store: P.StoreConfig,
             result.record_failure("transport_error", grid_url, str(exc))
             continue
         result.grids_fetched += 1
+        result.grid_ids.append(str(grid.grid_id))
         parsed = P.parse_grid(got.body)
         ids = parsed.product_ids
         if not ids:
@@ -337,8 +360,17 @@ def walk_grids(fetch: Callable[[str], Fetched], store: P.StoreConfig,
             logger.info("grid %s: %d productIds, %d sortedProductIds",
                         grid.grid_id, len(ids), len(parsed.sorted_product_ids))
 
-        for start in range(0, len(ids), P.PRODUCTS_PER_CALL):
-            batch = ids[start:start + P.PRODUCTS_PER_CALL]
+        for product_id in ids:
+            seen = id_trails.setdefault(product_id, [])
+            if grid.trail not in seen:
+                seen.append(grid.trail)
+        fresh = [i for i in ids if i not in fetched_ids]
+        if len(fresh) != len(ids):
+            logger.info("grid %s: %d of %d product(s) already fetched this run",
+                        grid.grid_id, len(ids) - len(fresh), len(ids))
+        fetched_ids.update(fresh)
+        for start in range(0, len(fresh), P.PRODUCTS_PER_CALL):
+            batch = fresh[start:start + P.PRODUCTS_PER_CALL]
             url = P.products_array_url(store.store_id, store.catalog_id, batch)
             try:
                 got = _get(fetch, url, result, rules)
@@ -358,7 +390,8 @@ def walk_grids(fetch: Callable[[str], Fetched], store: P.StoreConfig,
             result.products_requested += len(batch)
             parsed_products = P.parse_products_array(
                 got.body, store, locale=locale, category=grid.trail,
-                grid_id=grid.grid_id, page=1)
+                grid_id=grid.grid_id, page=1, owners=owners,
+                bundle_entries=bundle_entries)
             result.payload_errors.extend(parsed_products.errors)
             result.duplicate_bundles += parsed_products.duplicate_bundles
             for row in parsed_products.rows:
@@ -367,21 +400,51 @@ def walk_grids(fetch: Callable[[str], Fetched], store: P.StoreConfig,
                 if row.sku:
                     seen_sku.add(row.sku)
                 result.rows.append(row)
-                if max_products is not None and len(result.rows) >= max_products:
+                if max_skus is not None and len(result.rows) >= max_skus:
                     break
             if delay:
                 time.sleep(delay)
-            if max_products is not None and len(result.rows) >= max_products:
-                result.stop_reason = "max_products_reached"
+            if max_skus is not None and len(result.rows) >= max_skus:
+                result.stop_reason = "max_skus_reached"
                 break
+    _canonicalise(result, owners, id_trails, bundle_entries, locale)
     return result.settle()
+
+
+def _canonicalise(result: WalkResult, owners: Dict[Any, Dict[str, Any]],
+                  id_trails: Dict[int, List[str]],
+                  bundle_entries: Dict[Any, set], locale: str) -> None:
+    """Re-attribute every row to the run-wide owner of its bundle.
+
+    A row emitted in batch 1 may have been attributed to the only entry seen
+    so far; a lower entry id for the same bundle can turn up in batch 7. Left
+    alone, `product_id` and `url` depend on which batch a bundle appeared in
+    first, and two runs that split batches differently export different
+    values for identical data. This pass runs once, after everything is read,
+    so the answer cannot depend on order at all.
+    """
+    for row in result.rows:
+        owner = owners.get(row.bundle_id)
+        if owner and owner.get("id") is not None and owner["id"] != row.product_id:
+            row.product_id = owner["id"]
+            slug = P.canonical_slug(owner.get("productUrl"))
+            row.url = P.product_url(locale, owner["id"], slug)
+        # Every grid that listed ANY entry pointing at this bundle, not just
+        # the one whose payload produced the row. Sorted, not in traversal
+        # order: two runs that walk the same grids in a different order must
+        # export the same bytes, or `diff_runs` reports the traversal.
+        found: set = set()
+        for entry_id in bundle_entries.get(row.bundle_id, {row.product_id}):
+            found.update(id_trails.get(entry_id, []))
+        row.categories = sorted(found) or None
 
 
 def crawl(fetch: Callable[[str], Fetched], store_id: int,
           category: Optional[str] = None, locale: str = P.DEFAULT_LOCALE,
-          max_grids: Optional[int] = None, max_products: Optional[int] = None,
+          max_grids: Optional[int] = None, max_skus: Optional[int] = None,
           delay: float = 0.0, rules: Optional[P.RobotsRules] = None,
-          on_grid: Optional[Callable[[], None]] = None) -> WalkResult:
+          on_grid: Optional[Callable[[], None]] = None,
+          store: Optional[P.StoreConfig] = None) -> WalkResult:
     """store config -> menu -> grids -> products, in one call.
 
     **This never raises away rows it has already collected.** It used to: an
@@ -393,7 +456,11 @@ def crawl(fetch: Callable[[str], Fetched], store_id: int,
     """
     result = WalkResult()
     try:
-        store = load_store(fetch, store_id, result, rules)
+        # The caller may already have read it — `api_scraper.resolve_store`
+        # does, to find the store id in the first place. Fetching it a second
+        # time cost an extra request per run and, worse, that request was not
+        # counted in the run's own tally, so the reported cost was wrong.
+        store = store or load_store(fetch, store_id, result, rules)
         result.store = store
         grids = load_grids(fetch, store_id, result, rules)
     except (HttpError, SchemaError, TransportError) as exc:
@@ -413,7 +480,7 @@ def crawl(fetch: Callable[[str], Fetched], store_id: int,
 
     try:
         return walk_grids(fetch, store, picked, locale=locale, delay=delay,
-                          max_products=max_products, rules=rules, result=result,
+                          max_skus=max_skus, rules=rules, result=result,
                           on_grid=on_grid)
     except EdgeRefusal as exc:
         # The exit was refused mid-walk. That ends the run — a different exit

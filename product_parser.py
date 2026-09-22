@@ -684,7 +684,10 @@ def parse_products_array(payload: Any, store: Optional[StoreConfig] = None,
                          locale: str = DEFAULT_LOCALE,
                          category: Optional[str] = None,
                          grid_id: Optional[str] = None,
-                         page: Optional[int] = None) -> ProductsResult:
+                         page: Optional[int] = None,
+                         owners: Optional[Dict[Any, Dict[str, Any]]] = None,
+                         bundle_entries: Optional[Dict[Any, set]] = None
+                         ) -> ProductsResult:
     """One `Product` per (product, colour, size), plus whatever was not one.
 
     The real record is not the array entry. Every visible entry measured on
@@ -734,7 +737,14 @@ def parse_products_array(payload: Any, store: Optional[StoreConfig] = None,
     # 14 entries carried none on 2026-09-19), so reading it off whichever
     # entry happened to be iterated first would make the column flap between
     # runs exactly as `product_id` did.
-    owner: Dict[Any, Dict[str, Any]] = {}
+    # `owners`, when the caller passes one, spans the WHOLE RUN rather than
+    # this payload. Resolving within one batch was only half the guarantee:
+    # the same bundle reached from a different entry in a later batch kept
+    # whichever came first, so `product_id` and `url` still moved with batch
+    # order. `catalog_walk.walk_grids` threads one dict through every call
+    # and re-attributes at the end, which makes the export stable for a
+    # downstream join rather than merely stable within a request.
+    owner: Dict[Any, Dict[str, Any]] = owners if owners is not None else {}
     for entry in entries or []:
         if not isinstance(entry, dict) or entry.get("id") is None:
             continue
@@ -743,6 +753,10 @@ def parse_products_array(payload: Any, store: Optional[StoreConfig] = None,
                 current = owner.get(holder["id"])
                 if current is None or entry["id"] < current["id"]:
                     owner[holder["id"]] = entry
+                # Which entry ids lead to this bundle, so the caller can map
+                # a grid's id list onto rows without re-fetching anything.
+                if bundle_entries is not None:
+                    bundle_entries.setdefault(holder["id"], set()).add(entry["id"])
 
     for entry in entries or []:
         if not isinstance(entry, dict):

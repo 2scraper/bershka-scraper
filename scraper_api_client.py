@@ -49,7 +49,8 @@ import catalog_walk
 import env_config
 import product_parser as P
 from catalog_walk import Fetched
-from output_writer import EXIT_BLOCKED, EXIT_REMOTE_API_ERROR, finish_run
+from output_writer import (EXIT_BLOCKED, EXIT_REMOTE_API_ERROR, finish_run,
+                           scope_fingerprint)
 
 logger = logging.getLogger("scraper_api_client")
 
@@ -147,7 +148,7 @@ def scrape(args) -> int:
         else:
             result = catalog_walk.crawl(
                 fetch, store_id, category=args.category, locale=args.site_locale,
-                max_grids=args.max_grids, max_products=args.max_products,
+                max_grids=args.max_grids, max_skus=args.max_skus,
                 delay=args.delay)
     except catalog_walk.RobotsRefusal as exc:
         print(f"[!] {exc}")
@@ -167,6 +168,11 @@ def scrape(args) -> int:
         pages_requested=result.grids_seen or 1,
         pages_completed=result.grids_fetched or 1,
         pages_failed=[f["url"] for f in result.failures] or None,
+        scope=scope_fingerprint(
+            store_id=result.store.store_id if result.store else None,
+            locale=args.site_locale, category=args.category,
+            grid_ids=result.grid_ids, max_grids=args.max_grids,
+            max_skus=args.max_skus),
         start_url=start_url, final_url=P.BASE, mode=args.mode)
 
 

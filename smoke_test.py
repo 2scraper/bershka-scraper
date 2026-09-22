@@ -885,10 +885,11 @@ def test_catalog_walk():
           empty.stop_reason == "no_grid_matched_category")
     check("...and produced no rows", not empty.rows)
 
-    # max_products stops the walk.
-    capped = catalog_walk.crawl(fetch, 44009506, category="SALE", max_products=2)
-    check("max_products stops the walk", len(capped.rows) == 2)
-    check("...and says why", capped.stop_reason == "max_products_reached")
+    # The row cap stops the walk. Named `--max-skus` now, because it counts
+    # rows and a row is a SKU; `--max-products` still works as an alias.
+    capped = catalog_walk.crawl(fetch, 44009506, category="SALE", max_skus=2)
+    check("the sku cap stops the walk", len(capped.rows) == 2)
+    check("...and says why", capped.stop_reason == "max_skus_reached")
 
     # robots is enforced INSIDE the walk, not only at the CLI.
     def forbidden_fetch(url):
@@ -2482,8 +2483,10 @@ def test_failure_handling():
     MENU = json.dumps({"items": [
         {"id": 1, "name": "A", "content": {"id": "grid-A", "type": "grid"}, "children": []},
         {"id": 2, "name": "B", "content": {"id": "grid-B", "type": "grid"}, "children": []}]})
-    GRID = json.dumps({"productIds": [1, 2], "sortedProductIds": [1, 2],
-                       "gridContext": {"gridId": "g"}})
+    GRID_A = json.dumps({"productIds": [1, 2], "sortedProductIds": [1, 2],
+                         "gridContext": {"gridId": "gA"}})
+    GRID_B = json.dumps({"productIds": [3, 4], "sortedProductIds": [3, 4],
+                         "gridContext": {"gridId": "gB"}})
 
     def products(n):
         size = lambda k: {"sku": k, "name": "M", "isBuyable": True,
@@ -2510,7 +2513,7 @@ def test_failure_handling():
             if "/menu" in url:
                 return catalog_walk.Fetched(200, MENU.encode())
             if "grid-A" in url:
-                return catalog_walk.Fetched(200, GRID.encode())
+                return catalog_walk.Fetched(200, GRID_A.encode())
             if "grid-B" in url:
                 return catalog_walk.Fetched(status, body)
             if "productsArray" in url:
@@ -2534,8 +2537,10 @@ def test_failure_handling():
             return catalog_walk.Fetched(200, STORE.encode())
         if "/menu" in url:
             return catalog_walk.Fetched(200, MENU.encode())
-        if "/grid/" in url:
-            return catalog_walk.Fetched(200, GRID.encode())
+        if "grid-A" in url:
+            return catalog_walk.Fetched(200, GRID_A.encode())
+        if "grid-B" in url:
+            return catalog_walk.Fetched(200, GRID_B.encode())
         if "productsArray" in url:
             state["n"] += 1
             if state["n"] == 1:
@@ -2557,8 +2562,10 @@ def test_failure_handling():
             return catalog_walk.Fetched(200, STORE.encode())
         if "/menu" in url:
             return catalog_walk.Fetched(200, MENU.encode())
-        if "/grid/" in url:
-            return catalog_walk.Fetched(200, GRID.encode())
+        if "grid-A" in url:
+            return catalog_walk.Fetched(200, GRID_A.encode())
+        if "grid-B" in url:
+            return catalog_walk.Fetched(200, GRID_B.encode())
         if "productsArray" in url:
             return catalog_walk.Fetched(200, products(2).encode())
         raise AssertionError(url)
@@ -2691,6 +2698,200 @@ def test_robots_snapshot_travels():
 
     check("and with the snapshot present the rules are all there",
           len(product_parser.shipped_robots("*")) == 140)
+    return not _failures
+
+
+def test_scope_guard():
+    group("a diff refuses two different markets")
+    import diff_runs
+    from output_writer import scope_fingerprint, schema_version
+
+    gb = scope_fingerprint(44009506, "gb", "WOMEN / X", ["g1"], 1, None)
+    de = scope_fingerprint(44009504, "de", "WOMEN / X", ["g1"], 1, None)
+    other_grids = scope_fingerprint(44009506, "gb", "WOMEN / X", ["g2"], 1, None)
+
+    class _Args:
+        def __init__(self, old, new, force=False):
+            self.old, self.new, self.force = old, new, force
+
+    tmp = tempfile.mkdtemp()
+
+    def write(name, scope):
+        path = os.path.join(tmp, name + ".json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump([{"sku": "1", "price": 1.0}], fh)
+        with open(os.path.join(tmp, name + ".meta.json"), "w", encoding="utf-8") as fh:
+            json.dump({"status": "complete", "mode": "category", "scope": scope}, fh)
+        return path
+
+    a, b = write("gb", gb), write("de", de)
+    # Two complete runs of the same SKU in two markets used to be comparable,
+    # so every row read as a price change rather than as two currencies.
+    problems = diff_runs._scope_problems(_Args(a, b))
+    check("a gb/de pair is refused", bool(problems))
+    check("...naming the store", any("store_id" in p for p in problems))
+    check("...and the locale", any("locale" in p for p in problems))
+    check("--force is offered, not assumed",
+          any("--force" in p for p in problems))
+    check("...and --force actually allows it",
+          diff_runs._scope_problems(_Args(a, b, force=True)) == [])
+
+    c = write("othergrids", other_grids)
+    problems = diff_runs._scope_problems(_Args(a, c))
+    check("different grids are refused too", bool(problems))
+    check("...and the message says why it matters",
+          any("delisted" in p for p in problems))
+
+    same = write("gb2", gb)
+    check("the same scope compares cleanly",
+          diff_runs._scope_problems(_Args(a, same)) == [])
+
+    # A run written before scopes existed must be reported as unknown, not
+    # waved through: "no scope recorded" is not "same scope".
+    path = os.path.join(tmp, "old.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump([{"sku": "1"}], fh)
+    with open(os.path.join(tmp, "old.meta.json"), "w", encoding="utf-8") as fh:
+        json.dump({"status": "complete", "mode": "category"}, fh)
+    problems = diff_runs._scope_problems(_Args(path, a))
+    check("a run with no scope is refused rather than assumed to match",
+          bool(problems) and any("no scope" in p for p in problems))
+
+    check("the schema version is part of the scope",
+          gb["schema_version"] == schema_version())
+    shutil.rmtree(tmp, ignore_errors=True)
+    return not _failures
+
+
+def test_attribution_is_run_wide():
+    group("a bundle's owner does not depend on batch order")
+    import catalog_walk
+
+    STORE = json.dumps({"id": 1, "countryCode": "GB",
+                        "catalogs": [{"id": 2, "type": 1}],
+                        "details": {"imageBaseUrl": "https://x",
+                                    "locale": {"currencyCode": "GBP",
+                                               "currencyDecimals": -2}}})
+
+    def entry(entry_id, bundle_id, sku):
+        return {"id": entry_id, "type": "BundleBean", "productUrl": "slug-l01",
+                "bundleProductSummaries": [
+                    {"id": bundle_id, "name": "P", "productUrl": "slug-l01",
+                     "detail": {"reference": "r", "colors": [
+                         {"id": "1", "name": "Blue", "sizes": [
+                             {"sku": sku, "name": "M", "isBuyable": True,
+                              "backSoon": "0", "price": "2099"}]}]}}]}
+
+    def run(order):
+        payloads = {"gA": [entry(233573528, 500, 9001)],
+                    "gB": [entry(229723104, 500, 9001)]}
+        names = ["gA", "gB"] if order == "A-first" else ["gB", "gA"]
+        turn = {"n": 0}
+
+        def fetch(url):
+            if "/itxrest/2/catalog/store/" in url:
+                return catalog_walk.Fetched(200, STORE.encode())
+            if "/menu" in url:
+                items = [{"id": i, "name": n,
+                          "content": {"id": n, "type": "grid"}, "children": []}
+                         for i, n in enumerate(names)]
+                return catalog_walk.Fetched(200, json.dumps({"items": items}).encode())
+            ids = {"gA": 233573528, "gB": 229723104}
+            for name in names:
+                if f"/grid/{name}" in url:
+                    return catalog_walk.Fetched(200, json.dumps(
+                        {"productIds": [ids[name]], "sortedProductIds": [ids[name]],
+                         "gridContext": {"gridId": name}}).encode())
+            if "productsArray" in url:
+                which = names[turn["n"]]
+                turn["n"] += 1
+                return catalog_walk.Fetched(200, json.dumps(
+                    {"products": payloads[which]}).encode())
+            raise AssertionError(url)
+        return catalog_walk.crawl(fetch, 1)
+
+    first = run("A-first").rows[0]
+    second = run("B-first").rows[0]
+    # Resolving the owner inside one payload was only half the guarantee: the
+    # same bundle reached from a lower entry in a later batch kept whichever
+    # arrived first, so product_id and url moved with batch order and any
+    # downstream join moved with them.
+    check("the lowest entry id wins whatever the order",
+          first.product_id == second.product_id == 229723104)
+    check("...so the URL is stable too", first.url == second.url)
+    check("every menu trail that reached the sku is kept",
+          set(first.categories) == {"gA", "gB"})
+    check("...sorted, so two runs export the same bytes",
+          first.categories == second.categories == sorted(first.categories))
+    check("`category` still holds the first trail for compatibility",
+          first.category in ("gA", "gB"))
+
+    # A product listed by several grids used to be downloaded once per grid,
+    # at roughly 25 KB a time, and deduplicated only after it arrived.
+    STORE2 = json.dumps({"id": 1, "countryCode": "GB",
+                         "catalogs": [{"id": 2, "type": 1}],
+                         "details": {"imageBaseUrl": "https://x",
+                                     "locale": {"currencyCode": "GBP",
+                                                "currencyDecimals": -2}}})
+    calls = {"n": 0}
+
+    def repeated(url):
+        if "/itxrest/2/catalog/store/" in url:
+            return catalog_walk.Fetched(200, STORE2.encode())
+        if "/menu" in url:
+            return catalog_walk.Fetched(200, json.dumps({"items": [
+                {"id": 1, "name": "gA", "content": {"id": "gA", "type": "grid"},
+                 "children": []},
+                {"id": 2, "name": "gB", "content": {"id": "gB", "type": "grid"},
+                 "children": []}]}).encode())
+        if "/grid/" in url:
+            # Both grids list the SAME product.
+            return catalog_walk.Fetched(200, json.dumps(
+                {"productIds": [7], "sortedProductIds": [7],
+                 "gridContext": {"gridId": "g"}}).encode())
+        if "productsArray" in url:
+            calls["n"] += 1
+            return catalog_walk.Fetched(200, json.dumps(
+                {"products": [entry(7, 700, 4242)]}).encode())
+        raise AssertionError(url)
+
+    res = catalog_walk.crawl(repeated, 1)
+    check("a product two grids both list is fetched once", calls["n"] == 1)
+    check("...and still appears once in the output", len(res.rows) == 1)
+    check("...while recording BOTH categories, which the fetch no longer "
+          "carries", res.rows[0].categories == ["gA", "gB"])
+    return not _failures
+
+
+def test_store_config_is_read_once():
+    group("the store config is not fetched twice")
+    import catalog_walk
+
+    STORE = json.dumps({"id": 44009506, "countryCode": "GB",
+                        "catalogs": [{"id": 40259534, "type": 1}],
+                        "details": {"imageBaseUrl": "https://x",
+                                    "locale": {"currencyCode": "GBP",
+                                               "currencyDecimals": -2}}})
+    reads = {"n": 0}
+
+    def fetch(url):
+        if "/itxrest/2/catalog/store/" in url:
+            reads["n"] += 1
+            return catalog_walk.Fetched(200, STORE.encode())
+        if "/menu" in url:
+            return catalog_walk.Fetched(200, json.dumps({"items": []}).encode())
+        raise AssertionError(url)
+
+    store = catalog_walk.load_store(fetch, 44009506)
+    before = reads["n"]
+    # `api_scraper.resolve_store` has already read it to find the store id;
+    # `crawl` used to read it again, and that second request was not even
+    # counted in the run's own tally, so the reported cost was wrong.
+    catalog_walk.crawl(fetch, 44009506, store=store)
+    check("crawl reuses a store it was handed", reads["n"] == before)
+    reads["n"] = 0
+    catalog_walk.crawl(fetch, 44009506)
+    check("...and still reads it when it was not", reads["n"] == 1)
     return not _failures
 
 
@@ -2871,6 +3072,9 @@ def main() -> int:
     ok &= test_failure_handling()
     ok &= test_proxy_rotation_is_wired()
     ok &= test_robots_snapshot_travels()
+    ok &= test_scope_guard()
+    ok &= test_attribution_is_run_wide()
+    ok &= test_store_config_is_read_once()
     ok &= test_output_contract()
     ok &= test_writers()
     ok &= test_finish_run()

@@ -37,6 +37,14 @@ import env_config
 import proxy_pool
 from output_writer import EXIT_REMOTE_API_ERROR, RemoteAPIError
 
+# At module level, deliberately, and not inside start(). The offline suite
+# guards `import puppeteer_scraper` behind try/except ImportError and REPORTS the skip,
+# and CI's engine-smoke job imports this module with pyppeteer installed. Both
+# only mean something if importing this module actually requires the driver
+# (CLAUDE.md §10). Imported inside start(), the module loaded cleanly with no
+# pyppeteer at all, so neither check could ever fail.
+from pyppeteer import connect, launch  # noqa: E402
+
 logger = logging.getLogger("puppeteer_scraper")
 
 
@@ -53,7 +61,6 @@ class PuppeteerDriver:
         return self._loop.run_until_complete(coro)
 
     def start(self):
-        from pyppeteer import connect, launch
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         if self.args.cdp_endpoint:

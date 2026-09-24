@@ -24,7 +24,7 @@ translation.
 # A category, by its trail through the site's own menu
 python3 api_scraper.py --category "WOMEN / Accessories / Bags and purses"
 
-# Every grid the menu lists — 585 of them on gb, so mean it
+# Every grid the menu lists — 507 of them on gb (2026-09-24), so mean it
 python3 api_scraper.py --list-categories | head -40
 
 # One product, by the id its URL carries
@@ -90,7 +90,7 @@ python3 api_scraper.py --category "MEN / Clothes / Polos" --format csv --allow-e
 
 `--category` matches a menu **trail**, not a leaf name, so `"WOMEN / SALE"`
 means that whole subtree and `"Jeans"` means every jeans grid under any
-section. Without it a run walks all 585 grids; pair it with `--max-grids`
+section. Without it a run walks all 507 grids; pair it with `--max-grids`
 unless you mean that.
 
 `tools/browser_profile_client.py` builds a Scraping Browser API connection
@@ -165,7 +165,9 @@ The grid arrives afterwards as JSON, so this repo walks the API instead:
 
 robots.txt permits every one of them — see below.
 
-Breadth comes from the menu, which carried **585 grids** on `gb`, not from
+Breadth comes from the menu, which carried **507 grids** on `gb` on
+2026-09-24 (597 nodes are typed `grid`; the other 90 name a category key,
+answer 404 on the grid endpoint, and are skipped), not from
 paging: a grid returns its whole id list in one response and there is no
 cursor. `--category` matches a menu **trail**, so `"WOMEN / SALE"` means that
 whole subtree.

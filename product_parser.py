@@ -571,13 +571,29 @@ class MenuGrid:
     section: Optional[str] = None
 
 
-def walk_menu(payload: Any) -> List[MenuGrid]:
+def walk_menu(payload: Any, skipped: Optional[List[str]] = None) -> List[MenuGrid]:
     """Every node whose content is a grid, depth-first, in menu order.
 
     `marketing` nodes are dropped rather than followed: `/itxrest/1/marketing/`
     is the one catalogue path robots disallows for `*`, and there were 33 of
     them in the GB menu on 2026-09-19. `redirection` nodes (57) point at other
     menu entries, not at products, so they are dropped too.
+
+    A node whose grid content names the node's OWN KEY is not a grid either,
+    and it is skipped while its children are still walked. The menu marks
+    section roots, folders, regional variants and A/B entries
+    (`BERSHKA_WOMAN`, `1_PW_SALE_CONO_NORTE`, `TESTAB-…`) as
+    `{"type": "grid", "id": <their key>}`, and the grid endpoint has no such
+    grid. Measured on gb on 2026-09-24: 90 of the 597 grid-typed nodes are
+    self-references and all 90 answered HTTP 404, while 40 of 40 sampled
+    UUID-id grids answered 200. Fetched, they made every run that touched one
+    end `partial` on a 404 no retry could fix; the WOMEN / SALE subtree hit
+    one on every run.
+
+    The rule is the self-reference, not "is it a UUID": it is what those 90
+    had in common, it says why the node is not a grid, and it cannot drop a
+    real grid whose id merely has another shape. Pass `skipped` to collect the
+    trails that were left out, so a caller can say how many.
     """
     data = _as_json(payload)
     items = (data or {}).get("items") if isinstance(data, dict) else None
@@ -587,7 +603,12 @@ def walk_menu(payload: Any) -> List[MenuGrid]:
         name = node.get("name") or ""
         here = trail + [name]
         content = node.get("content") or {}
-        if content.get("type") == "grid" and content.get("id"):
+        is_grid = content.get("type") == "grid" and content.get("id")
+        if is_grid and node.get("key") is not None and str(content["id"]) == str(node["key"]):
+            # A category naming itself, not a grid (see the docstring).
+            if skipped is not None:
+                skipped.append(" / ".join(p for p in here if p))
+        elif is_grid:
             out.append(MenuGrid(
                 grid_id=str(content["id"]),
                 name=name,

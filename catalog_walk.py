@@ -259,7 +259,13 @@ def load_grids(fetch: Callable[[str], Fetched], store_id: int,
     result = result if result is not None else WalkResult()
     got = _get(fetch, P.menu_url(store_id), result, rules)
     _json_or_raise(got, P.menu_url(store_id), "items")
-    return P.walk_menu(got.body)
+    skipped: List[str] = []
+    grids = P.walk_menu(got.body, skipped)
+    if skipped:
+        logger.info("menu: %d grid(s); %d node(s) name a category key rather "
+                    "than a grid and were skipped (the grid endpoint answers "
+                    "404 for them)", len(grids), len(skipped))
+    return grids
 
 
 def select_grids(grids: Sequence[P.MenuGrid], category: Optional[str] = None,

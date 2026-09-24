@@ -300,7 +300,7 @@ FIX_MENU = json.dumps({"items": [
                "children": []},
           ]},
      ]},
-    {"id": 1010193133, "name": "MEN", "content": {"id": "BERSHKA_MAN", "type": "grid"},
+    {"id": 1010193133, "key": "BERSHKA_MAN", "name": "MEN", "content": {"id": "BERSHKA_MAN", "type": "grid"},
      "children": []},
 ]})
 
@@ -546,9 +546,20 @@ def test_store_config():
 
 def test_menu():
     group("menu")
-    grids = walk_menu(FIX_MENU)
+    skipped = []
+    grids = walk_menu(FIX_MENU, skipped)
     trails = [g.trail for g in grids]
-    check("grid nodes are collected", len(grids) == 3)
+    # This used to pin 3, counting the WOMEN and MEN section roots as grids.
+    # Their content names their own key, and on the live gb menu all 90 such
+    # nodes answered 404 on the grid endpoint (2026-09-24), so counting them
+    # pinned the defect rather than the behaviour.
+    check("only real grids are collected", len(grids) == 1)
+    check("a node whose grid content names its own key is NOT a grid",
+          not any(g.grid_id in ("BERSHKA_WOMAN", "BERSHKA_MAN") for g in grids))
+    check("...and is reported as skipped, by trail",
+          sorted(skipped) == ["MEN", "WOMEN"])
+    check("...while its children are still walked",
+          "WOMEN / SALE / Dresses and jumpsuits" in trails)
     check("the menu trail is the full path",
           "WOMEN / SALE / Dresses and jumpsuits" in trails)
     check("a marketing node is NOT a grid",
@@ -556,15 +567,15 @@ def test_menu():
     check("a redirection node is NOT a grid",
           not any(g.grid_id == "1010822084" for g in grids))
     check("the section is the first trail element",
-          {g.section for g in grids} == {"WOMEN", "MEN"})
+          {g.section for g in grids} == {"WOMEN"})
 
     picked = catalog_walk.select_grids(grids, "SALE")
     check("select_grids matches on the trail, not the leaf name",
           len(picked) == 1 and picked[0].name == "Dresses and jumpsuits")
     check("select_grids is case-insensitive",
           len(catalog_walk.select_grids(grids, "sale")) == 1)
-    check("no category means every grid", len(catalog_walk.select_grids(grids)) == 3)
-    check("limit is honoured", len(catalog_walk.select_grids(grids, None, 2)) == 2)
+    check("no category means every grid", len(catalog_walk.select_grids(grids)) == 1)
+    check("limit is honoured", len(catalog_walk.select_grids(grids + grids, None, 1)) == 1)
     return not _failures
 
 

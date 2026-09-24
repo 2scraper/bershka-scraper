@@ -2457,7 +2457,15 @@ def test_challenge_ladder():
     # must NOT, because a plain socket cannot run a challenge script and
     # pretending otherwise is how a repo grows a path that never works.
     for name in ENGINES:
-        mod = __import__(name)
+        try:
+            mod = __import__(name)
+        except ImportError as exc:
+            # Recorded, not swallowed: CI's engine-smoke job fails if the
+            # engine it installed is not importable, so an absent driver here
+            # is the offline job's expected state and nothing else.
+            _SKIPPED_ENGINES.add(name)
+            print(f"  SKIP  {name} — driver library absent ({exc})")
+            continue
         driver_cls = [c for c in vars(mod).values()
                       if isinstance(c, type) and hasattr(c, "evaluate")]
         check(f"{name} has a driver the ladder can drive", bool(driver_cls))
@@ -3001,9 +3009,14 @@ def test_engine_parity(skips):
         missing = sorted(core_flags - here)
         check(f"{name} carries every core flag", not missing)
 
+    # Only over the engines that import HERE: with the drivers imported at
+    # module level (§10), an engine whose library is absent cannot be asked
+    # for its flags, and an empty set from it would read as "takes no
+    # --cdp-endpoint" rather than as "not installed".
+    importable = [n for n in ALL_ENGINES if _importable(n)]
     check("only the browser engines take --cdp-endpoint",
-          {n for n in ALL_ENGINES if "--cdp-endpoint" in _engine_flags_safe(n)}
-          == set(ENGINES))
+          {n for n in importable if "--cdp-endpoint" in _engine_flags_safe(n)}
+          == set(ENGINES) & set(importable))
     check("the vendor transport chooses no exit of its own",
           "--proxy-file" not in _engine_flags_safe("scraper_api_client"))
     return not _failures
@@ -3042,6 +3055,42 @@ def _engine_flags(mod):
         raise RuntimeError(f"{mod.__name__} built no parser")
     return {flag for action in parser._actions for flag in action.option_strings
             if flag.startswith("--")} - {"--help"}
+
+
+_SKIPPED_ENGINES = set()
+
+
+def _importable(name):
+    try:
+        __import__(name)
+        return True
+    except ImportError:
+        return False
+
+
+def test_engines_import_their_driver_at_module_level():
+    """CLAUDE.md §10. The drivers were imported inside start(), so every
+    engine imported cleanly with no driver installed: the offline suite's
+    skips never fired and CI's engine-smoke import check could not fail.
+    Asserted from the source, so it holds with no driver installed."""
+    group("drivers at module level")
+    import ast
+    drivers = {"playwright_scraper": "playwright", "puppeteer_scraper": "pyppeteer",
+               "selenium_scraper": "selenium"}
+    for mod, lib in drivers.items():
+        tree = ast.parse(open(os.path.join(REPO_ROOT, mod + ".py"), encoding="utf-8").read())
+        top = set()
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                top.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                top.add(node.module.split(".")[0])
+        check(f"{mod} imports {lib} at MODULE level", lib in top)
+        nested = [n.lineno for n in ast.walk(tree)
+                  if isinstance(n, ast.ImportFrom) and n not in tree.body
+                  and (n.module or "").split(".")[0] == lib]
+        check(f"{mod} has no {lib} import left inside a function", not nested)
+    return not _failures
 
 
 def _engine_flags_safe(name):
@@ -3086,6 +3135,7 @@ def main() -> int:
     ok &= test_readiness_wait()
     ok &= test_engines(skips)
     ok &= test_engine_parity(skips)
+    ok &= test_engines_import_their_driver_at_module_level()
     ok &= test_env_duplicate_keys()
     ok &= test_env_example_matches_env_keys()
     ok &= test_proxy_filenames_are_ignored()

@@ -25,25 +25,18 @@ Five buckets, each keyed on sku:
   unmatched      — a row this project's parser could not recover a sku for,
                    counted rather than folded into added/removed
 
-Why `source_changed` exists here when the transfermarkt sibling has no such
-bucket: this site has FOUR ways of stating a price and they are not equally
-trustworthy — a tile's microdata, a gift-set tile's bare text, a product
-page's JSON-LD, and a product page's rendered price (see
-output_writer.Product.price_source). A category run and a product run of the
-same sku therefore read the same price through different instruments, and
-so do two category runs if the site changes a tile from a set-price block to
-a normal one. Reporting that as a price change would be reporting our own
-instrument, which is exactly the false "price changed" CLAUDE.md §8 forbids.
+Why `source_changed` exists: `price_source` names which part of the
+catalogue payload a price was read from (`api-size` for a size's own price,
+`api-bundle` for a bundle that prices itself -- see
+output_writer.Product.price_source). If the site moves a product from one
+shape to the other, the two runs read the same price through different
+fields; reporting that as a price change would be reporting our own reading,
+not the site.
 
 There is no `--price-tolerance-pct`: every row of one run comes from one
-locale and therefore one currency (`price` and `currency` are read together
-from the same node), so there is no exchange-rate tick to absorb. A price on
-this site moves in whole currency units, not continuously.
-
-A run against a showcase locale (`int/en`, `ru`) has `price=None` on every
-row. Diffing two of those is legitimate and reports title, availability and
-delisting changes; it will simply never report a price change, because the
-site publishes none.
+store and therefore one currency (read from the store config, not guessed
+per row), so there is no exchange-rate tick to absorb. Two runs of different
+stores are refused outright by the scope check below.
 """
 
 import argparse
@@ -231,9 +224,9 @@ def _scope_problems(args) -> List[str]:
 
 def _check_comparable(args) -> bool:
     """Refuse a diff between runs that are not both complete, or that are
-    different modes. See mediamarkt-scraper's diff_runs.py for the full
-    rationale — unchanged here except that this repo's modes are named
-    category/product.
+    different modes, or that cover a different scope (store, locale,
+    category, grids, limits, schema). A partial run's missing grids would
+    otherwise read as delisted products, and two markets as price changes.
     """
     problems = []
     modes = {}

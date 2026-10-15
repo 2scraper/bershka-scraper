@@ -931,9 +931,9 @@ def test_catalog_walk():
 # Family checks, carried over unchanged from the sibling repo they were
 # written in. They cover code this repo did not write and did not change:
 # the writers, the diff, the env loader, the proxy pool, the fingerprint
-# client and the policy checks. CLAUDE.md §11 — a workflow step must call
-# the shipped check rather than re-implement it — is the same rule one
-# level up: a rewritten copy of these would drift from the module it tests.
+# client and the policy checks. A rewritten copy of these would drift from
+# the module it tests, the same way a workflow step that re-implements a
+# shipped check drifts from it.
 # ---------------------------------------------------------------------------
 
 def test_readiness_wait():
@@ -1130,11 +1130,15 @@ def test_finish_run():
                     "-- a bot-check is a different failure than an empty page",
                     rc == EXIT_BLOCKED)
 
-        # 0 rows, not blocked (a genuinely empty page) -> EXIT_NO_PRODUCTS.
+        # 0 rows, not blocked, and every request succeeded -> EXIT_NO_PRODUCTS.
+        # This used to pass a stop reason ("empty") nothing in the repo
+        # produces, and any zero-row run returned 4 whatever had happened --
+        # a 500, a timeout, an HTML page where JSON was promised. Only a
+        # genuinely empty ANSWER gets 4 now; see test_exit_contract.
         rc = finish_run([], prefix, "json", allow_empty=False, blocked=False,
-                        stop_reason="empty", pages_requested=1, pages_completed=1,
+                        stop_reason="completed", pages_requested=1, pages_completed=1,
                         start_url="https://x/1", final_url="https://x/1", mode="category")
-        ok &= check("0 rows, NOT blocked, returns EXIT_NO_PRODUCTS",
+        ok &= check("0 rows, NOT blocked, every request answered, returns EXIT_NO_PRODUCTS",
                     rc == EXIT_NO_PRODUCTS)
 
     ok &= check("COMPLETE_STOP_REASONS names the reasons that count as a full run",
@@ -1225,13 +1229,12 @@ def test_diff():
                     [{"sku": "P9", "price": 50.5, "price_source": "jsonld"}]
                 )["changed"]) == 1)
 
-    # Two showcase-locale runs: every price is None on both sides, which is
-    # correct and must not read as a change.
+    # Two runs whose rows carry no price: None on both sides is not a change.
     old_sc = [{"sku": "P1", "title": "A", "price": None, "currency": None,
                "price_source": None}]
     new_sc = [{"sku": "P1", "title": "A", "price": None, "currency": None,
                "price_source": None}]
-    ok &= check("two showcase-locale runs report no spurious price change",
+    ok &= check("two runs with no prices report no spurious price change",
                 not diff_rows(old_sc, new_sc)["changed"])
     return ok
 
@@ -1287,28 +1290,34 @@ def test_env_config():
         with open(env_path, "w", encoding="utf-8") as f:
             f.write("TWOCAPTCHA_KEY=from_dotenv\n")
             f.write("BERSHKA_PROXY=http://a:b@from-dotenv:8080\n")
+            f.write("BERSHKA_CDP_ENDPOINT=ws://from-dotenv:9222\n")
             f.write("SOME_TYPO_KEY=oops\n")
 
         saved = {k: os.environ.pop(k, None) for k in env_config.ENV_KEYS}
         try:
-            os.environ["BERSHKA_URL"] = "https://from-real-env/x"
+            os.environ["BERSHKA_CDP_ENDPOINT"] = "ws://from-real-env:9222"
             env_config.load_env(env_path, override=False)
 
             class Args:
                 twocaptcha_key = None
-                proxy = None
-                url = "https://from-cli-flag/x"  # explicit flag: must win
+                proxy = "http://from-cli-flag:1"  # explicit flag: must win
                 cdp_endpoint = None
 
             args = env_config.apply(Args(), quiet=True)
             ok &= check("an explicit CLI flag beats both env var and .env file",
-                        args.url == "https://from-cli-flag/x")
+                        args.proxy == "http://from-cli-flag:1")
             ok &= check("a real environment variable beats the .env file",
-                        os.environ.get("BERSHKA_URL") == "https://from-real-env/x")
+                        args.cdp_endpoint == "ws://from-real-env:9222")
             ok &= check(".env fills a destination nothing else set",
                         args.twocaptcha_key == "from_dotenv")
+
+            class Args2:
+                twocaptcha_key = None
+                proxy = None
+                cdp_endpoint = None
+            args2 = env_config.apply(Args2(), quiet=True)
             ok &= check(".env value reaches a destination via ENV_KEYS mapping",
-                        args.proxy == "http://a:b@from-dotenv:8080")
+                        args2.proxy == "http://a:b@from-dotenv:8080")
 
             unknown = env_config.unknown_keys(env_path)
             ok &= check("a typo'd key in .env is reported, not silently ignored",
@@ -1525,7 +1534,7 @@ def test_env_example_matches_env_keys():
     ok = True
     path = os.path.join(REPO_ROOT, ".env.example")
     if not os.path.exists(path):
-        return check(".env.example exists (CLAUDE.md §3: it is WRITTEN, never "
+        return check(".env.example exists (it is WRITTEN for this repo, never "
                      "copied from a sibling repo)", False)
     text = open(path, encoding="utf-8").read()
     documented = {line.split("=", 1)[0].strip()
@@ -1539,7 +1548,7 @@ def test_env_example_matches_env_keys():
                 "than a missing one" % sorted(documented - declared),
                 documented <= declared)
 
-    # §17: a braced placeholder in a copied example reads as CONFIGURED and
+    # A braced placeholder in a copied example reads as CONFIGURED and
     # produces a 401 a long way from its cause. env_config treats both
     # shapes as unset; this asserts the example only ever uses those.
     for name in sorted(documented):
@@ -1787,10 +1796,10 @@ def test_browser_profile_client():
     import browser_profile_client as bpc
     import requests as _requests
 
-    # The shape of a real key, not a real one. Named with "example" on the
-    # same line on purpose: ci_checks.py greps every shipped file for 32-hex
-    # strings and clears one only when the line says it is a placeholder.
-    example_key = "0123456789abcdef0123456789abcdef"
+    # The shape of a real key, not a real one. Assembled from two halves so
+    # no 32-hex literal sits in a shipped file: ci_checks.py fails on one,
+    # with no "it says example" exemption to hide a real key behind.
+    example_key = "0123456789abcdef" * 2
     KEY = example_key
 
     # The GET endpoints take the key as a QUERY PARAMETER, and `requests`
@@ -2014,7 +2023,7 @@ def test_fingerprint_client_reads_env():
     # This file used to be the one CLI in the repo that skipped env_config
     # entirely and read only its own --key flag -- so a TWOCAPTCHA_KEY set in
     # .env or exported the way every other script here reads it was silently
-    # ignored, and the first thing CLAUDE.md tells someone to run when a key
+    # ignored, and the first thing to run when a key
     # "isn't working" (`python3 fingerprint_client.py`) could not see it.
     saved = os.environ.pop("TWOCAPTCHA_KEY", None)
     old_argv = sys.argv
@@ -2081,7 +2090,7 @@ def test_credentials_never_reach_a_log():
     import fingerprint_client as fpc
     import captcha_solver as cs
 
-    example_key = "0123456789abcdef0123456789abcdef"
+    example_key = "0123456789abcdef" * 2
     for name, module in (("fingerprint_client", fpc), ("captcha_solver", cs)):
         redacted = module._redact(
             "400 Client Error: Bad Request for url: "
@@ -2982,8 +2991,8 @@ def test_engines(skips):
 def test_engine_parity(skips):
     group("engine parity")
     # Every engine walks the SAME catalogue route, because the route lives in
-    # catalog_walk and none of them may carry a copy of it. This is
-    # CLAUDE.md §11 applied to the engines rather than to a workflow step.
+    # catalog_walk and none of them may carry a copy of it: a copy is a copy
+    # that drifts.
     for name in ALL_ENGINES:
         path = os.path.join(REPO_ROOT, name + ".py")
         if not os.path.exists(path):
@@ -3021,7 +3030,7 @@ def test_engine_parity(skips):
         check(f"{name} carries every core flag", not missing)
 
     # Only over the engines that import HERE: with the drivers imported at
-    # module level (§10), an engine whose library is absent cannot be asked
+    # module level, an engine whose library is absent cannot be asked
     # for its flags, and an empty set from it would read as "takes no
     # --cdp-endpoint" rather than as "not installed".
     importable = [n for n in ALL_ENGINES if _importable(n)]
@@ -3080,7 +3089,7 @@ def _importable(name):
 
 
 def test_engines_import_their_driver_at_module_level():
-    """CLAUDE.md §10. The drivers were imported inside start(), so every
+    """The drivers were imported inside start(), so every
     engine imported cleanly with no driver installed: the offline suite's
     skips never fired and CI's engine-smoke import check could not fail.
     Asserted from the source, so it holds with no driver installed."""
@@ -3111,6 +3120,651 @@ def _engine_flags_safe(name):
         return set()
 
 
+# ---------------------------------------------------------------------------
+# The exit contract, the writers, the solve budget, the Scraper API answer,
+# flag validation, the credential scan and public-file citations.
+# ---------------------------------------------------------------------------
+
+def test_exit_contract():
+    group("finish_run: every stop reason maps to the exit the contract names")
+    ok = True
+    import output_writer as ow
+
+    cases = (
+        # (stop_reason, rows?, pages_failed, expected exit)
+        ("completed", False, None, EXIT_NO_PRODUCTS),
+        ("no_grid_matched_category", False, None, EXIT_NO_PRODUCTS),
+        ("menu_listed_no_grids", False, None, EXIT_NO_PRODUCTS),
+        ("product_not_found", False, None, EXIT_NO_PRODUCTS),
+        ("edge_refusal", False, ["u"], EXIT_BLOCKED),
+        ("setup_failed", False, ["u"], EXIT_REMOTE_API_ERROR),
+        ("requests_failed", False, ["u"], EXIT_REMOTE_API_ERROR),
+        ("parser_found_nothing", False, ["u"], EXIT_REMOTE_API_ERROR),
+        ("aborted", False, ["u"], EXIT_REMOTE_API_ERROR),
+        ("page_load_timeout", False, None, EXIT_REMOTE_API_ERROR),
+        ("a_reason_nobody_has_named_yet", False, None, EXIT_REMOTE_API_ERROR),
+        # A "completed" walk that nonetheless lists a failed URL is not an
+        # empty answer either.
+        ("completed", False, ["u"], EXIT_REMOTE_API_ERROR),
+        ("completed", True, None, 0),
+        ("edge_refusal", True, ["u"], EXIT_PARTIAL),
+        ("requests_failed", True, ["u"], EXIT_PARTIAL),
+        ("max_skus_reached", True, None, EXIT_PARTIAL),
+    )
+    with tempfile.TemporaryDirectory() as d:
+        for i, (reason, with_rows, failed, expected) in enumerate(cases):
+            prefix = os.path.join(d, "r%d" % i)
+            rows = [Product(sku="1")] if with_rows else []
+            rc = finish_run(rows, prefix, "both", allow_empty=False,
+                            blocked=False, stop_reason=reason,
+                            pages_requested=1, pages_completed=1,
+                            pages_failed=failed, start_url="s", final_url="f")
+            ok &= check("%s, %s row(s), failed=%s -> exit %s (got %s)"
+                        % (reason, len(rows), bool(failed), expected, rc),
+                        rc == expected)
+
+        # A zero-row FAILURE writes nothing even under --allow-empty: the
+        # flag is for a genuinely empty answer, and a "failed" sidecar beside
+        # the previous good output would contradict it.
+        prefix = os.path.join(d, "fail_allow_empty")
+        rc = finish_run([], prefix, "both", allow_empty=True, blocked=False,
+                        stop_reason="setup_failed", pages_requested=1,
+                        pages_completed=0, pages_failed=["u"],
+                        start_url="s", final_url="f")
+        ok &= check("a zero-row failure with --allow-empty exits 5",
+                    rc == EXIT_REMOTE_API_ERROR)
+        ok &= check("...and writes no rows and no sidecar",
+                    not any(os.path.exists(prefix + ext)
+                            for ext in (".json", ".csv", ".meta.json")))
+
+        prefix = os.path.join(d, "true_empty_allow_empty")
+        rc = finish_run([], prefix, "both", allow_empty=True, blocked=False,
+                        stop_reason="no_grid_matched_category",
+                        pages_requested=0, pages_completed=0,
+                        start_url="s", final_url="f")
+        meta = json.load(open(prefix + ".meta.json", encoding="utf-8"))
+        ok &= check("a TRUE empty answer with --allow-empty still writes, "
+                    "exit 4, status 'empty' (never 'failed')",
+                    rc == EXIT_NO_PRODUCTS and meta["status"] == "empty")
+
+    ok &= check("EXIT_FETCH_FAILED is the contract's 5",
+                ow.EXIT_FETCH_FAILED == 5 == EXIT_REMOTE_API_ERROR)
+    return ok
+
+
+def _e2e_fixtures():
+    store = json.dumps({"id": 44009506, "countryCode": "GB",
+                        "catalogs": [{"id": 40259534, "type": 1}],
+                        "details": {"imageBaseUrl": "https://x",
+                                    "locale": {"currencyCode": "GBP",
+                                               "currencyDecimals": -2}}})
+    menu = json.dumps({"items": [
+        {"id": 1, "name": "A", "content": {"id": "grid-A", "type": "grid"}, "children": []},
+        {"id": 2, "name": "B", "content": {"id": "grid-B", "type": "grid"}, "children": []}]})
+    grid_a = json.dumps({"productIds": [1, 2], "sortedProductIds": [1, 2]})
+    grid_b = json.dumps({"productIds": [3, 4], "sortedProductIds": [3, 4]})
+    grid_empty = json.dumps({"productIds": [], "sortedProductIds": []})
+
+    def products(ids, sized=True):
+        size = lambda k: {"sku": k, "name": "M", "isBuyable": True,
+                          "backSoon": "0", "price": "2099"}
+        return json.dumps({"products": [
+            {"id": i, "type": "BundleBean", "bundleProductSummaries": [
+                {"id": 200 + i, "name": "P%d" % i, "detail": {"reference": "r", "colors": [
+                    {"id": "1", "name": "Blue",
+                     "sizes": [size(1000 + i * 2), size(1001 + i * 2)] if sized else []}]}}]}
+            for i in ids]})
+    return store, menu, grid_a, grid_b, grid_empty, products
+
+
+def _run_api_scraper(fetch, argv):
+    """Drive the REAL api_scraper.scrape over a fake transport. Returns the
+    exit code. Nothing touches the network."""
+    import api_scraper
+    saved_argv, saved_build = sys.argv, api_scraper.build_fetch
+    saved_delay = catalog_walk.RETRY_BASE_DELAY
+    catalog_walk.RETRY_BASE_DELAY = 0.001
+    fetch.rotate = lambda reason: False
+    try:
+        sys.argv = ["api_scraper.py"] + argv
+        args = api_scraper.parse_args()
+        api_scraper.build_fetch = lambda a, pool: fetch
+        return api_scraper.scrape(args)
+    finally:
+        sys.argv, api_scraper.build_fetch = saved_argv, saved_build
+        catalog_walk.RETRY_BASE_DELAY = saved_delay
+
+
+def test_end_to_end_exit_codes():
+    group("api_scraper end to end: blocked != empty != never obtained")
+    ok = True
+    store, menu, grid_a, grid_b, grid_empty, products = _e2e_fixtures()
+    edge = catalog_walk.Fetched(403, FIX_EDGE_403.encode(), FIX_EDGE_403_HEADERS)
+
+    def make(grid_a_answer=None, grid_b_answer=None, menu_answer=None,
+             products_answer=None):
+        def fetch(url):
+            if "/itxrest/2/catalog/store/" in url and "productsArray" not in url \
+                    and "/menu" not in url and "/grid/" not in url:
+                return catalog_walk.Fetched(200, store.encode())
+            if "/menu" in url:
+                if menu_answer:
+                    return menu_answer()
+                return catalog_walk.Fetched(200, menu.encode())
+            if "grid-A" in url:
+                return grid_a_answer() if grid_a_answer else \
+                    catalog_walk.Fetched(200, grid_a.encode())
+            if "grid-B" in url:
+                return grid_b_answer() if grid_b_answer else \
+                    catalog_walk.Fetched(200, grid_b.encode())
+            if "productsArray" in url:
+                if products_answer:
+                    return products_answer(url)
+                ids = [int(x) for x in re.search(r"productIds=([\d,]+)", url)
+                       .group(1).split(",")]
+                return catalog_walk.Fetched(200, products(ids).encode())
+            raise AssertionError("unexpected URL " + url)
+        return fetch
+
+    def boom():
+        raise TimeoutError("read timed out")
+
+    with tempfile.TemporaryDirectory() as d:
+        out = ["--out", os.path.join(d, "o"), "--delay", "0"]
+        shapes = (
+            ("an edge refusal on the first grid", make(grid_a_answer=lambda: edge),
+             EXIT_BLOCKED),
+            ("an edge refusal AFTER rows", make(grid_b_answer=lambda: edge),
+             EXIT_PARTIAL),
+            ("every grid HTTP 500 (retries spent)",
+             make(grid_a_answer=lambda: catalog_walk.Fetched(500, b"{}"),
+                  grid_b_answer=lambda: catalog_walk.Fetched(500, b"{}")),
+             EXIT_REMOTE_API_ERROR),
+            ("every grid a transport error",
+             make(grid_a_answer=boom, grid_b_answer=boom), EXIT_REMOTE_API_ERROR),
+            ("the menu a transport error (setup_failed)",
+             make(menu_answer=boom), EXIT_REMOTE_API_ERROR),
+            ("every grid HTML at HTTP 200",
+             make(grid_a_answer=lambda: catalog_walk.Fetched(200, b"<html>x</html>"),
+                  grid_b_answer=lambda: catalog_walk.Fetched(200, b"<html>x</html>")),
+             EXIT_REMOTE_API_ERROR),
+            ("every grid genuinely empty",
+             make(grid_a_answer=lambda: catalog_walk.Fetched(200, grid_empty.encode()),
+                  grid_b_answer=lambda: catalog_walk.Fetched(200, grid_empty.encode())),
+             EXIT_NO_PRODUCTS),
+            ("products listed but parsed to zero rows",
+             make(products_answer=lambda url: catalog_walk.Fetched(
+                 200, products([1, 2], sized=False).encode())),
+             EXIT_REMOTE_API_ERROR),
+            ("a clean walk", make(), 0),
+        )
+        for label, fetch, expected in shapes:
+            rc = _run_api_scraper(fetch, out)
+            ok &= check("%s -> exit %s (got %s)" % (label, expected, rc),
+                        rc == expected)
+
+        product = ["--mode", "product", "--product-id", "7"] + out
+        not_found = json.dumps({"products": [
+            {"key": "_ERR_PRODUCT_NOT_FOUND", "description": "gone"}]})
+        pshapes = (
+            ("--mode product, productsArray HTTP 500",
+             make(products_answer=lambda u: catalog_walk.Fetched(500, b"{}")),
+             EXIT_REMOTE_API_ERROR),
+            ("--mode product, productsArray HTML at 200",
+             make(products_answer=lambda u: catalog_walk.Fetched(200, b"<html/>")),
+             EXIT_REMOTE_API_ERROR),
+            ("--mode product, the API's own not-found record",
+             make(products_answer=lambda u: catalog_walk.Fetched(200, not_found.encode())),
+             EXIT_NO_PRODUCTS),
+            ("--mode product, an edge refusal",
+             make(products_answer=lambda u: edge), EXIT_BLOCKED),
+            ("--mode product, a served product", make(), 0),
+        )
+        for label, fetch, expected in pshapes:
+            rc = _run_api_scraper(fetch, product)
+            ok &= check("%s -> exit %s (got %s)" % (label, expected, rc),
+                        rc == expected)
+
+    # The parser-failure state has its own name, not "requests_failed".
+    res = catalog_walk.crawl(make(products_answer=lambda url: catalog_walk.Fetched(
+        200, products([1, 2], sized=False).encode())), 44009506)
+    ok &= check("a payload that lists products and parses to nothing is "
+                "stop_reason parser_found_nothing (got %r)" % res.stop_reason,
+                res.stop_reason == "parser_found_nothing")
+    return ok
+
+
+def test_atomic_writes_and_modes():
+    group("atomic writes: durable, cleaned up, and the umask honoured")
+    ok = True
+    import output_writer as ow
+    rows = [Product(sku="1", title="a")]
+
+    with tempfile.TemporaryDirectory() as d:
+        for umask in (0o022, 0o002, 0o077):
+            path = os.path.join(d, "new_%o.json" % umask)
+            old = os.umask(umask)
+            try:
+                write_json(rows, path)
+            finally:
+                os.umask(old)
+            mode = os.stat(path).st_mode & 0o777
+            ok &= check("a NEW file under umask %03o gets %03o (got %03o)"
+                        % (umask, 0o666 & ~umask, mode), mode == 0o666 & ~umask)
+
+        path = os.path.join(d, "existing.csv")
+        open(path, "w").close()
+        os.chmod(path, 0o664)
+        old = os.umask(0o022)
+        try:
+            write_csv(rows, path)
+        finally:
+            os.umask(old)
+        ok &= check("an EXISTING 0664 file keeps 0664 under umask 022",
+                    os.stat(path).st_mode & 0o777 == 0o664)
+
+        synced = []
+        real_fsync = ow.os.fsync
+        ow.os.fsync = lambda fd: (synced.append(fd), real_fsync(fd))[1]
+        try:
+            write_json(rows, os.path.join(d, "synced.json"))
+            ow.write_run_meta(os.path.join(d, "synced"), {"status": "x"})
+        finally:
+            ow.os.fsync = real_fsync
+        ok &= check("every write is fsync'd before the rename", len(synced) == 2)
+
+        path = os.path.join(d, "keep.json")
+        write_json(rows, path)
+        before = open(path, encoding="utf-8").read()
+
+        class Boom(Exception):
+            pass
+
+        def bad_dump(*a, **k):
+            raise Boom("disk full")
+        real_dump = ow.json.dump
+        ow.json.dump = bad_dump
+        try:
+            try:
+                write_json([Product(sku="2")], path)
+            except Boom:
+                pass
+        finally:
+            ow.json.dump = real_dump
+        ok &= check("a write that fails half way leaves the old file intact",
+                    open(path, encoding="utf-8").read() == before)
+        ok &= check("...and leaves no temporary file behind",
+                    sorted(n for n in os.listdir(d) if n.endswith(".tmp")) == [])
+    return ok
+
+
+def test_csv_formula_guard():
+    group("CSV formula guard: text neutralised, numbers and JSON untouched")
+    ok = True
+    row = Product(sku="1", title='=HYPERLINK("http://x")', price=-5.0,
+                  related_categories=["+cmd", "ok"], color_name="Blue")
+    with tempfile.TemporaryDirectory() as d:
+        prefix = os.path.join(d, "o")
+        rc = finish_run([row], prefix, "both", allow_empty=False, blocked=False,
+                        stop_reason="completed", pages_requested=1,
+                        pages_completed=1, start_url="s", final_url="f",
+                        extra={"csv_cells_escaped": "caller wins", "x": 1})
+        cells = list(csv.DictReader(open(prefix + ".csv", encoding="utf-8",
+                                         newline="")))[0]
+        data = json.load(open(prefix + ".json", encoding="utf-8"))[0]
+        meta = json.load(open(prefix + ".meta.json", encoding="utf-8"))
+        ok &= check("the run itself is fine", rc == 0)
+        ok &= check("a formula-shaped title gets a leading apostrophe in CSV",
+                    cells["title"] == "'" + row.title)
+        ok &= check("a list joined into one cell is escaped AFTER joining",
+                    cells["related_categories"] == "'+cmd | ok")
+        ok &= check("a negative NUMBER is left alone", cells["price"] == "-5.0")
+        ok &= check("ordinary text is left alone", cells["color_name"] == "Blue")
+        ok &= check("the JSON keeps the site's bytes",
+                    data["title"] == row.title
+                    and data["related_categories"] == ["+cmd", "ok"])
+        ok &= check("a caller's own sidecar key wins over the escape count",
+                    meta.get("csv_cells_escaped") == "caller wins"
+                    and meta.get("x") == 1)
+        finish_run([row], prefix, "both", allow_empty=False, blocked=False,
+                   stop_reason="completed", pages_requested=1,
+                   pages_completed=1, start_url="s", final_url="f")
+        meta = json.load(open(prefix + ".meta.json", encoding="utf-8"))
+        ok &= check("csv_cells_escaped is recorded in the sidecar (2)",
+                    meta.get("csv_cells_escaped") == 2)
+    return ok
+
+
+def test_solve_budget():
+    group("paid solves: one allowance per URL, checked before purchase")
+    ok = True
+    import browser_bridge
+    import types
+
+    bought = []
+    fake_challenge = types.SimpleNamespace(kind="recaptcha_v2", source="html",
+                                           sitekey="k", is_aws_waf=False)
+    saved = (browser_bridge.detect_aws_waf, browser_bridge.solve_recaptcha)
+    browser_bridge.detect_aws_waf = lambda html, url: fake_challenge
+    browser_bridge.solve_recaptcha = lambda *a, **k: bought.append(1) or "tok"
+
+    class _Driver:
+        def content(self):
+            return "<html>a wall</html>"
+        def evaluate(self, js, arg=None):
+            return None
+        def sleep(self, ms):
+            pass
+        def navigate(self, url):
+            return 200
+        def set_cookie(self, *a):
+            pass
+
+    args = types.SimpleNamespace(solve_captcha="when-blocked",
+                                 twocaptcha_key="stub-not-a-key",
+                                 captcha_api="v2", min_score=0.7, proxy=None)
+    try:
+        url = "https://www.bershka.com/itxrest/2/catalog/store/1/menu"
+        budget = page_flow.SolveBudget()
+        for _ in range(5):
+            browser_bridge.handle_challenge(_Driver(), args, url, budget=budget)
+        ok &= check("five challenges on one URL buy %d answer(s) (got %d)"
+                    % (page_flow.SOLVES_PER_PAGE, len(bought)),
+                    len(bought) == page_flow.SOLVES_PER_PAGE)
+
+        # Through the real retry path: a 503 wall that keeps coming back.
+        bought.clear()
+        budget = page_flow.SolveBudget()
+        driver = _Driver()
+        fetch = browser_bridge.make_fetch(
+            lambda js, u: {"status": 503, "body": "<html>wall</html>", "ok": True},
+            on_challenge=lambda u: browser_bridge.handle_challenge(
+                driver, args, u, budget=budget))
+        saved_delay = catalog_walk.RETRY_BASE_DELAY
+        catalog_walk.RETRY_BASE_DELAY = 0.001
+        try:
+            try:
+                catalog_walk._get(fetch, url, catalog_walk.WalkResult(),
+                                  sleep=lambda s: None)
+            except catalog_walk.HttpError:
+                pass
+        finally:
+            catalog_walk.RETRY_BASE_DELAY = saved_delay
+        ok &= check("a URL retried by _get after a 503 wall buys ONE answer, "
+                    "not one per attempt (got %d)" % len(bought),
+                    len(bought) == 1)
+    finally:
+        browser_bridge.detect_aws_waf, browser_bridge.solve_recaptcha = saved
+
+    # Every call site that can pay passes the run's one budget.
+    tree = ast.parse(open(os.path.join(REPO_ROOT, "browser_bridge.py"),
+                          encoding="utf-8").read())
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) in ("handle_challenge", "open_storefront")]
+    unbudgeted = [n.lineno for n in calls
+                  if not any(k.arg == "budget" for k in n.keywords)]
+    ok &= check("every handle_challenge/open_storefront call passes budget= "
+                "(unbudgeted at lines %s)" % unbudgeted,
+                calls and not unbudgeted)
+    return ok
+
+
+def test_scraper_api_response():
+    group("Scraper API: target status from http_code, refusals not retried")
+    ok = True
+    try:
+        import scraper_api_client as sac
+    except ImportError as exc:
+        return check("scraper_api_client imports (%s)" % exc, False)
+    import logging
+    import types
+
+    class _Resp:
+        def __init__(self, status_code, body, headers=None):
+            self.status_code = status_code
+            self._body = body
+            self.headers = headers or {}
+            self.text = json.dumps(body)
+        def json(self):
+            return self._body
+
+    posts = []
+    secret = "user:" + "hunter2" + "@"
+    answers = {}
+
+    def fake_post(url, **kw):
+        posts.append(kw.get("json", {}).get("url"))
+        return answers["next"]
+
+    args = types.SimpleNamespace(timeout=30, proxy_country=None, cdp_url=None,
+                                 key="stub-not-a-key")
+    saved = sac.requests.post
+    sac.requests.post = fake_post
+    records = []
+    handler = logging.Handler()
+    handler.emit = lambda r: records.append(r.getMessage())
+    sac.logger.addHandler(handler)
+    old_level = sac.logger.level
+    sac.logger.setLevel(logging.DEBUG)
+    try:
+        answers["next"] = _Resp(200, {"status": "success", "http_code": 200,
+                                      "body": "{}", "headers": {}},
+                                {"x-debug": "task cdpurl=ws://" + secret + "h:1 key=abcdef123456"})
+        got = sac.make_fetch(args)("https://www.bershka.com/x")
+        ok &= check("the recorded answer shape parses: status from http_code "
+                    "(got %r)" % got.status, got.status == 200)
+        ok &= check("x-debug never reaches the log with a credential in it",
+                    not any("hunter2" in r or "abcdef123456" in r for r in records))
+
+        answers["next"] = _Resp(200, {"status": "success", "http_code": 403,
+                                      "body": "<html/>"})
+        ok &= check("a target 403 arrives as 403, not as the verdict string",
+                    sac.make_fetch(args)("https://www.bershka.com/y").status == 403)
+
+        posts.clear()
+        answers["next"] = _Resp(402, {"error": "balance"})
+        try:
+            catalog_walk._get(sac.make_fetch(args), "https://www.bershka.com/itxrest/2/catalog/store/1/menu",
+                              catalog_walk.WalkResult(), sleep=lambda s: None)
+            raised = None
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        ok &= check("an API refusal (402) is raised as FatalFetchError",
+                    isinstance(raised, catalog_walk.FatalFetchError))
+        ok &= check("...after ONE billed task, not one per retry (got %d)"
+                    % len(posts), len(posts) == 1)
+    finally:
+        sac.requests.post = saved
+        sac.logger.removeHandler(handler)
+        sac.logger.setLevel(old_level)
+
+    src = open(os.path.join(REPO_ROOT, "scraper_api_client.py"), encoding="utf-8").read()
+    ok &= check("BERSHKA_CDP_ENDPOINT is not silently forwarded as cdpurl",
+                '"BERSHKA_CDP_ENDPOINT": "cdp_url"' not in src)
+    return ok
+
+
+def test_numeric_flags_are_validated():
+    group("numeric flags reject values that cannot mean anything")
+    ok = True
+    import argparse
+    import browser_bridge
+
+    def parser():
+        p = argparse.ArgumentParser(prog="x")
+        browser_bridge.add_core_arguments(p, "o")
+        browser_bridge.add_proxy_arguments(p)
+        browser_bridge.add_captcha_arguments(p)
+        return p
+
+    bad = (("--delay", "-1"), ("--timeout", "0"), ("--timeout", "-5"),
+           ("--max-grids", "0"), ("--max-skus", "-3"), ("--proxy-sessions", "0"),
+           ("--product-id", "-1"), ("--min-score", "1.5"), ("--delay", "nan"))
+    for flag, value in bad:
+        import io
+        import contextlib as _cl
+        err = io.StringIO()
+        code = None
+        with _cl.redirect_stderr(err):
+            try:
+                parser().parse_args([flag, value])
+            except SystemExit as exc:
+                code = exc.code
+        ok &= check("%s %s is a usage error naming the flag (exit %s)"
+                    % (flag, value, code),
+                    code == 2 and ("argument " + flag) in err.getvalue())
+    good = parser().parse_args(["--delay", "0", "--timeout", "1",
+                                "--max-grids", "1"])
+    ok &= check("the edge values that DO mean something are accepted",
+                good.delay == 0 and good.timeout == 1 and good.max_grids == 1)
+
+    # Every engine builds its CLI from the shared definitions, so the
+    # validators reach all five. Read from source: no driver import needed.
+    for name in ALL_ENGINES:
+        src = open(os.path.join(REPO_ROOT, name + ".py"), encoding="utf-8").read()
+        ok &= check("%s builds its flags with add_core_arguments" % name,
+                    "browser_bridge.add_core_arguments(" in src
+                    and not re.search(r'"--(delay|timeout|max-grids|max-skus)"', src))
+    return ok
+
+
+def test_credential_scan_paths():
+    group("credential scan: relative paths, venvs by marker, .env backups")
+    ok = True
+    hexkey = "0123456789abcdef" * 2
+
+    def scan(root):
+        proc = subprocess.run(
+            [sys.executable, str(pathlib_Path(root) / ".github" / "ci_checks.py"),
+             "--secret-check"], capture_output=True, text=True, cwd=root)
+        return proc.returncode, proc.stdout + proc.stderr
+
+    with tempfile.TemporaryDirectory() as d:
+        # A clone that LIVES under a directory called `venv`.
+        root = pathlib_Path(d) / "venv" / "build" / "repo"
+        (root / ".github").mkdir(parents=True)
+        shutil.copy(os.path.join(REPO_ROOT, ".github", "ci_checks.py"),
+                    root / ".github" / "ci_checks.py")
+        (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+        rc, out = scan(root)
+        m = re.search(r"ok\s+(\d+) files scanned", out)
+        ok &= check("a clone under venv/build/ still scans its files (%s)"
+                    % (m.group(1) if m else out.strip()[-80:]),
+                    rc == 0 and m and int(m.group(1)) >= 2)
+
+        # A virtualenv with a non-standard name is skipped by its marker.
+        venv = root / "myenv"
+        (venv / "lib").mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = /usr\n", encoding="utf-8")
+        (venv / "lib" / "vendored.py").write_text("# %s\n" % hexkey, encoding="utf-8")
+        rc, out = scan(root)
+        ok &= check("a venv called myenv/ is recognised by pyvenv.cfg and skipped",
+                    rc == 0 and "vendored" not in out)
+        shutil.rmtree(venv)
+
+        # A credentials backup is scanned even with no recognised suffix.
+        (root / ".env.bak").write_text("TWOCAPTCHA_KEY=%s\n" % hexkey,
+                                       encoding="utf-8")
+        rc, out = scan(root)
+        ok &= check("a key in .env.bak fails the scan", rc != 0 and ".env.bak" in out)
+        (root / ".env.bak").unlink()
+
+        # JSON is scanned too (the committed sample is JSON).
+        (root / "fixture.json").write_text('{"k": "%s"}\n' % hexkey, encoding="utf-8")
+        rc, out = scan(root)
+        ok &= check("a key in a .json file fails the scan",
+                    rc != 0 and "fixture.json" in out)
+        (root / "fixture.json").unlink()
+
+        # "example" on the line no longer exempts a key.
+        (root / "b.py").write_text('example_key = "%s"\n' % hexkey, encoding="utf-8")
+        rc, out = scan(root)
+        ok &= check("the word 'example' on a line does not exempt a 32-hex key",
+                    rc != 0 and "b.py" in out)
+        (root / "b.py").unlink()
+
+        # A scan that reads nothing must not print ok.
+        empty = pathlib_Path(d) / "empty"
+        (empty / ".github").mkdir(parents=True)
+        shutil.copy(os.path.join(REPO_ROOT, ".github", "ci_checks.py"),
+                    empty / ".github" / "ci_checks.py")
+        (empty / ".github" / "ci_checks.py").rename(empty / ".github" / "ci_checks.pyc_")
+        (empty / ".github" / "ci_checks.py").write_text(
+            open(empty / ".github" / "ci_checks.pyc_", encoding="utf-8").read()
+            .replace('SCANNED_SUFFIXES = (', 'SCANNED_SUFFIXES = ("._none_",) or ('),
+            encoding="utf-8")
+        rc, out = scan(empty)
+        ok &= check("a scan that read 0 files fails rather than printing ok",
+                    rc != 0 and "0 files scanned" in out)
+    return ok
+
+
+# Assembled from pieces so this file does not match itself.
+_PRIVATE_CITATIONS = (
+    "CLAUDE" + ".md", "claude" + "_2scraper", "2scraper" + "_repo_rules",
+    "play" + "book §", "template" + " §",
+)
+_SECTION_SIGN_RE = re.compile("§" + r"\s?\d")
+
+
+def test_no_private_citations():
+    group("public files cite no private instruction file")
+    ok = True
+    try:
+        listed = subprocess.run(["git", "-C", REPO_ROOT, "ls-files"],
+                                capture_output=True, text=True, check=True
+                                ).stdout.splitlines()
+    except (OSError, subprocess.CalledProcessError):
+        listed = [str(p.relative_to(REPO_ROOT)) for p in
+                  pathlib_Path(REPO_ROOT).rglob("*")
+                  if p.is_file() and ".git" not in p.parts
+                  and "__pycache__" not in p.parts]
+    hits = []
+    scanned = 0
+    for rel in listed:
+        path = os.path.join(REPO_ROOT, rel)
+        if not os.path.isfile(path):
+            continue
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (UnicodeDecodeError, OSError):
+            continue
+        scanned += 1
+        for token in _PRIVATE_CITATIONS:
+            if token in text:
+                hits.append("%s: %s" % (rel, token))
+        for m in _SECTION_SIGN_RE.finditer(text):
+            hits.append("%s: section reference %r" % (rel, m.group(0)))
+    ok &= check("the citation scan read the shipped files (%d)" % scanned,
+                scanned > 20)
+    ok &= check("no shipped file cites a private instruction file or a bare "
+                "section number (hits: %s)" % hits[:6], not hits)
+    return ok
+
+
+
+def test_canary_cannot_pass_without_the_site():
+    group("canary: green only when it read the site")
+    ok = True
+    path = os.path.join(REPO_ROOT, ".github", "workflows", "canary.yml")
+    if not os.path.isdir(os.path.join(REPO_ROOT, ".github")):
+        # The Docker image carries no .github; the check needs the repo.
+        print("  SKIP  no .github directory here (e.g. inside the image)")
+        return ok
+    text = open(path, encoding="utf-8").read()
+    verdict = text.split("- name: Interpret the exit code", 1)[-1]
+    verdict = verdict.split("- name:", 1)[0]
+    ok &= check("the verdict step ends on `test \"$code\" = \"0\"`",
+                'test "$code" = "0"' in verdict)
+    ok &= check("no exit code is rewritten to 0 (a skip that reads green)",
+                not re.search(r"code\s*=\s*0\b", verdict))
+    ok &= check("the data check is not conditional on a skip output",
+                "skipped" not in text)
+    ok &= check("the data check runs the row-floor run-check",
+                "--run-check" in text)
+    return ok
+
+
 def main() -> int:
     ok = True
     # Checks that could not run because an optional engine library is absent.
@@ -3138,6 +3792,16 @@ def main() -> int:
     ok &= test_output_contract()
     ok &= test_writers()
     ok &= test_finish_run()
+    ok &= test_exit_contract()
+    ok &= test_end_to_end_exit_codes()
+    ok &= test_atomic_writes_and_modes()
+    ok &= test_csv_formula_guard()
+    ok &= test_solve_budget()
+    ok &= test_scraper_api_response()
+    ok &= test_numeric_flags_are_validated()
+    ok &= test_credential_scan_paths()
+    ok &= test_no_private_citations()
+    ok &= test_canary_cannot_pass_without_the_site()
     ok &= test_diff()
     ok &= test_captcha()
     ok &= test_remote_api_error()

@@ -60,15 +60,38 @@ SYNC_ENDPOINT = f"{API_BASE}/tasks/sync"
 # The API caps `timeout` at 120s.
 MAX_API_TIMEOUT = 120
 
-# Global on purpose, not a single find/partition — see CLAUDE.md §8: a masker
-# that handles the first occurrence prints the password the other four times
-# and looks like it is working.
-_CREDENTIALS_IN_URL_RE = re.compile(r"([a-z][a-z0-9+.\-]*://)[^\s/@]+:[^\s/@]+@",
+# Global on purpose, not a single find/partition: a masker that handles the
+# first occurrence prints the password the other four times and looks like it
+# is working.
+_CREDENTIALS_IN_URL_RE = re.compile(r"([a-z][a-z0-9+.\-]*://)[^\s/'\"@]+@",
                                     re.IGNORECASE)
+# A key passed as a query parameter, or echoed back by the API, in free text.
+_KEY_IN_TEXT_RE = re.compile(
+    r"((?:client)?key|token|api[_-]?key|password)=([^&\s'\"]{4,})", re.IGNORECASE)
 
 
 def _mask_credentials(text: str) -> str:
-    return _CREDENTIALS_IN_URL_RE.sub(r"\1***:***@", text or "")
+    """Redact `user:pass@` in every URL and every `key=` / `token=` value."""
+    text = _CREDENTIALS_IN_URL_RE.sub(r"\1***:***@", text or "")
+    return _KEY_IN_TEXT_RE.sub(r"\1=***", text)
+
+
+def target_status(body: dict):
+    """The TARGET site's HTTP status from a Scraper API answer.
+
+    The answer is `{"status": <verdict string>, "http_code": <int>, ...}`:
+    `status` is the API's own verdict ("success"), and the target's status
+    is `http_code`. Reading `status` as the target's code raised
+    `ValueError: invalid literal for int() with base 10: 'success'` on every
+    call. `status` is used only if it is itself an integer.
+    """
+    code = body.get("http_code")
+    if isinstance(code, int):
+        return code
+    if isinstance(code, str) and code.isdigit():
+        return int(code)
+    legacy = body.get("status")
+    return legacy if isinstance(legacy, int) else 0
 
 
 def make_fetch(args):
@@ -102,24 +125,28 @@ def make_fetch(args):
             # network failure.
             timeout=min(args.timeout, MAX_API_TIMEOUT) + 30)
 
+        # The API's per-task metadata. It can echo the task back, including a
+        # credentialled URL, so it is masked and logged at DEBUG only.
         debug = response.headers.get("x-debug")
         if debug:
-            logger.info("x-debug: %s", debug)
+            logger.debug("x-debug: %s", _mask_credentials(debug))
 
         if response.status_code != 200:
             # The API's OWN call failing, not the site refusing a page:
             # 422 a task that ran and errored, 402 out of balance, 408 the
-            # sync wait exceeded. Mapped to EXIT_REMOTE_API_ERROR upstream.
-            raise RuntimeError(
+            # sync wait exceeded. Not retried -- each retry is another billed
+            # task with the same answer -- and mapped to exit 5 upstream.
+            raise catalog_walk.FatalFetchError(
                 f"Scraper API returned HTTP {response.status_code}: "
-                f"{response.text[:400]}")
+                f"{_mask_credentials(response.text[:400])}")
 
         body = response.json()
-        upstream = body.get("status")
+        upstream = target_status(body)
         text = body.get("body") or ""
         headers = body.get("headers") or {}
-        logger.info("upstream %s, %d bytes", upstream, len(text))
-        return Fetched(status=int(upstream or 0),
+        logger.info("upstream HTTP %s (verdict %r), %d bytes", upstream,
+                    body.get("status"), len(text))
+        return Fetched(status=upstream,
                        body=text.encode("utf-8", "replace"),
                        headers={str(k): str(v) for k, v in headers.items()})
 
@@ -189,13 +216,15 @@ def parse_args():
                         "`ps` reads argv.")
     p.add_argument("--cdp-url", default=None,
                    help="Route the fetch through an existing browser session "
-                        "(the API's `cdpurl`). Not needed on this site.")
+                        "(the API's `cdpurl`). Not needed on this site, and "
+                        "deliberately NOT read from BERSHKA_CDP_ENDPOINT: that "
+                        "variable is for the browser engines, and sending it "
+                        "to the API must be an explicit choice.")
     p.add_argument("--proxy-country", default=None,
                    help="Pin the API's exit country, e.g. gb.")
     args = p.parse_args()
     env_config.apply(args, keys={
         "TWOCAPTCHA_KEY": "key",
-        "BERSHKA_CDP_ENDPOINT": "cdp_url",
     })
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")

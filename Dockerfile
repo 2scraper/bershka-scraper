@@ -1,5 +1,6 @@
-# Builds the Playwright engine (the one the README recommends) into a
-# container with its own Chromium -- for a CI canary run or a scheduled job,
+# Builds a container whose entrypoint is api_scraper.py (the engine the README
+# recommends: plain HTTPS, no browser), with Playwright and its Chromium also
+# installed for the browser engine -- for a CI canary run or a scheduled job,
 # not required for local development (`pip install` directly is simpler
 # there).
 #
@@ -7,8 +8,8 @@
 #   docker run --rm --env-file .env -v "$PWD/out:/out" bershka-scraper \
 #     --category "WOMEN / Accessories / Bags and purses" --out /out/bags
 #
-# Pass --proxy/--twocaptcha-key the same way as running locally, or mount a
-# .env at /app/.env -- nothing here bakes in a credential.
+# Pass BERSHKA_PROXY through --env-file (or --proxy), or mount a .env at
+# /app/.env -- nothing here bakes in a credential.
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -32,8 +33,7 @@ COPY api_scraper.py browser_bridge.py captcha_solver.py catalog_walk.py \
 
 # The HTTP engine, not a browser: it is the primary one on this site (a
 # rendered listing carries no products at all), and the image is then a
-# `requests` install rather than a Chromium download. The browser engines are
-# in the image too — `--entrypoint python3 … playwright_scraper.py` reaches
-# them — but they need a browser this image deliberately does not carry.
+# `requests` client. Playwright's Chromium is installed above as well, so
+# `--entrypoint python3 … playwright_scraper.py` reaches the browser engine.
 ENTRYPOINT ["python3", "api_scraper.py"]
 CMD ["--help"]

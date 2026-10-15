@@ -3,6 +3,84 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+> **Exit codes changed.** A run that ends with zero rows now exits **5**
+> ("the content was never obtained") when requests kept failing, a response
+> was not the JSON its endpoint promises, the payload listed products and
+> parsed to none, or the menu/store could not be read — it used to exit 4,
+> the same as a genuinely empty category. An edge refusal met part way
+> through a walk is exit **3** with no rows (it was 4) and 6 with some.
+> `--allow-empty` no longer writes empty files or a `"failed"` sidecar for
+> such a failure. Exit 4 now means only that every request was answered and
+> the answer was "nothing".
+>
+> **Flag values are validated.** `--delay` below 0, `--timeout`,
+> `--max-grids`, `--max-skus`, `--proxy-sessions` or `--product-id` below 1,
+> and `--min-score` outside 0-1 are now usage errors (exit 2) naming the
+> flag, in every engine.
+>
+> **Output file modes.** New output files get `0666 & ~umask` (0644 under a
+> usual umask) instead of 0600; an existing file keeps its mode.
+>
+> **`BERSHKA_CDP_ENDPOINT` no longer reaches the Scraper API.**
+> `scraper_api_client.py` used to forward it as `cdpurl` on every task; pass
+> `--cdp-url` explicitly if you want that. `BERSHKA_URL` is no longer read
+> (no engine takes a start URL, so it never did anything).
+
+### Fixed
+
+* **The Scraper API transport could not read the API's answer.** It took
+  the target's status from `status`, which is the API's verdict string
+  (`"success"`), and every call raised `ValueError`; each was retried, so a
+  URL cost up to three billed tasks before the run ended with nothing. The
+  target status is now read from `http_code`, and an API refusal (402, 422,
+  408) is raised once and not retried.
+* **The `x-debug` header was logged verbatim.** It is now masked and logged
+  at DEBUG only.
+* **`--mode product` ignored the HTTP status.** A 5xx or an HTML page at
+  HTTP 200 read as "product not found"; the request now goes through the
+  same checks as a listing request.
+* **A payload that lists products and parses to no rows** is reported as
+  `parser_found_nothing` instead of an empty category.
+* **Paid captcha solves are capped.** One URL could buy three answers (one
+  per retry) and a run had no limit; every call site now spends from one
+  per-URL allowance, checked before the purchase.
+* **Writes are durable and readable.** Output, CSV and sidecar files are
+  fsync'd before the rename, and keep the umask-derived mode.
+* **CSV cells that a spreadsheet would execute** (starting with `=`, `+`,
+  `-`, `@`, tab or a line break) get a leading apostrophe in the CSV only;
+  JSON is unchanged and the count is recorded as `csv_cells_escaped` in the
+  sidecar.
+* **Credential scan.** Exclusions are evaluated relative to the repo, so a
+  clone under a directory called `venv` no longer scans 0 files and reports
+  clean; virtualenvs are recognised by `pyvenv.cfg` whatever their name;
+  `.env.*` backups, `.json` and `.csv` files are scanned; the word "example"
+  on a line no longer exempts a 32-hex string; a scan that read nothing
+  fails.
+* **`.gitignore`** covers `.env*` (keeping `.env.example`), scratch and
+  output directories by kind (`live/`, `out/`, `tmp/`, ...), root-level
+  `*.html` and every `*.pageN` dump.
+* **The canary cannot go green without reading the site.** Its skip path
+  (exit 3 rewritten to a green notice) is gone: exit 3, 4, 5 or 6 is red,
+  and the data check also requires `sku`, `url` and `currency` on every row
+  and `title`/`price` on at least 95%.
+* Issue templates, the review prompt, module docstrings and comments now
+  describe this site; text written for other sites, and two helper scripts
+  (`tools/waf_probe.sh`, `tools/verify_browser_api.sh`) that targeted
+  another site and used flags this repo does not have, are removed. The
+  unused page-state policy in `page_flow.py` is removed.
+* The Dockerfile and README describe the image as it is (entrypoint
+  `api_scraper.py`, Chromium also installed).
+
+### Changed (merged after 1.0.2)
+
+* Each engine imports its driver at module level, so CI's per-engine import
+  check can fail (#1).
+* Menu nodes whose grid content names their own key are skipped; the grid
+  endpoint answers 404 for all of them, and walking them made every full run
+  partial (#2).
+
 ## [1.0.2] — 2026-09-22
 
 The rest of the audit: both P2 findings and the code notes worth acting on.

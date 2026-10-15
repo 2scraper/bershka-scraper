@@ -99,8 +99,8 @@ class CaptchaChallenge:
     page_url: str = ""
     # AWS WAF only. Its task needs three values that all live together in
     # `window.gokuProps` on the challenge page, plus the two script URLs the
-    # page loads. Unlike Cloudflare Turnstile (§19 of the family notes),
-    # nothing has to be intercepted at runtime to get them: AWS WAF prints
+    # page loads. Unlike a Cloudflare Turnstile challenge page, whose
+    # parameters exist only inside a runtime call, nothing has to be intercepted at runtime to get them: AWS WAF prints
     # all of it into the served HTML, so a static read is enough.
     iv: Optional[str] = None
     context: Optional[str] = None
@@ -937,4 +937,4 @@ solve_recaptcha_v3 = solve_recaptcha
 # what the address has been doing — a narrow list is how a challenge gets
 # reported as an empty page months later. A solver for a challenge this site
 # has never been observed to serve is dead code; a DETECTOR for one is cheap
-# insurance. See the family note in CLAUDE.md.
+# insurance.

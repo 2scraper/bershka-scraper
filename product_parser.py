@@ -212,9 +212,8 @@ def is_interstitial(html: str) -> bool:
 # ---------------------------------------------------------------------------
 # robots.txt
 # ---------------------------------------------------------------------------
-# This site's robots.txt is the reason CLAUDE.md §7 now opens with "read
-# robots before designing pagination", and it does not reward a substring
-# check. Measured 2026-09-19 on the 5,927-byte file shipped beside this
+# This site's robots.txt has to be read before designing any pagination, and
+# it does not reward a substring check. Measured 2026-09-19 on the 5,927-byte file shipped beside this
 # module as `robots.snapshot.txt`:
 #
 #   * 31 user-agent groups.
@@ -222,7 +221,7 @@ def is_interstitial(html: str) -> bool:
 #     carrying 28, 62 and 50 rules. A parser that takes the first matching
 #     group and stops keeps 28 rules and drops 112 — including
 #     `Disallow: /ru/` and fifty per-country product-page bans of the shape
-#     `/kz/*-c0*p*.html`. RFC 9309 §2.2.1 says records with the same product
+#     `/kz/*-c0*p*.html`. RFC 9309 section 2.2.1 says records with the same product
 #     of user-agent lines are merged, so this parser merges them.
 #   * A bare `Disallow: /itxrest` appears TWICE — but in the `proximic`
 #     group (line 76) and the `Yandex` group (line 112, which also carries a
@@ -1243,9 +1242,9 @@ def detect_bot_challenge(body: str, url: Optional[str] = None) -> Optional[str]:
 def detect_page_state(body: str, status: Optional[int] = None,
                       url: Optional[str] = None,
                       headers: Optional[Dict[str, str]] = None) -> str:
-    """content | blocked | captcha | empty — see page_flow.STATE_POLICY.
+    """content | blocked | captcha | empty.
 
-    Ordered by how much each check PROVES, per CLAUDE.md §17:
+    Ordered by how much each check PROVES, not by how cheap it is:
 
     1. The edge refusal is checked first, headers included, because it is the
        one wall this site actually served and the only one whose remedy is a

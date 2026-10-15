@@ -7,7 +7,7 @@
 *.json
 *.csv
 !package.json
-# Committed on purpose: a real excerpt of a real run (--mode market-values),
+# Committed on purpose: a real excerpt of a real run (--mode category),
 # so a reader can see the exact output shape without installing anything.
 !sample_output.json
 # The sample's run-metadata sidecar travels with it. `.github/ci_checks.py
@@ -20,18 +20,30 @@ bershka_products_*.*
 # The canary workflow's own run, and anyone reproducing it locally.
 canary_run.*
 
-# --- debug artifacts the engines drop next to themselves -------------------
-# Written on purpose when a page yields nothing or comes back blocked, and by
-# --dump-html on success too. Large, and stale within hours.
+# --- debug artifacts and raw dumps ------------------------------------------
+# Matched by KIND rather than by one remembered name: a raw capture reaches
+# `git add -A` through whatever directory someone happened to call it, so
+# every usual name for a scratch or output directory is covered, plus any
+# bare HTML file at the repo root and every per-page dump shape
+# (`x.page3`, `x.json.page3`). Large, stale within hours, and a capture
+# carries whatever per-visitor state the page held.
 *_debug.html
 *_debug.png
 *.html.page*
-
-# --- unlike other members of this family, index.html and landing.md are ----
-# --- committed here on purpose, not generated -- do NOT gitignore them -----
-# (kept as an explicit note rather than a silent omission, since every sibling
-# scraper in this family DOES gitignore an index.html as "published
-# elsewhere", and that is deliberately not true of this repo)
+*.page[0-9]*
+/*.html
+live/
+live_results/
+out/
+output/
+run/
+runs/
+result/
+results/
+tmp/
+scratch/
+dump/
+dumps/
 
 # --- a downloaded 2captcha proxy list is a credential file ------------------
 # Every line of one carries a login and a password. The glob covers the
@@ -73,16 +85,22 @@ env/
 # The scrapers mask user:pass in their own logs, but raw HTML dumps are NOT
 # masked, and a key pasted into a shell history file is not masked either.
 *.log
-.env
 *.key
 secrets*
+# Every copy of the credentials file -- `.env.bak`, `.env.local`,
+# `.env.save` -- not only `.env` itself: a renamed working copy is exactly
+# the one nobody remembers is there. `.env.example` is documentation and is
+# committed.
+.env
+.env*
+!.env.example
 
 # --- local research material ------------------------------------------------
-# `captures/` holds the raw pages this repo was built against: 28MB of real
-# HTML and sitemaps from bershkabeauty.com, fetched 2026-09-17/18. It is
+# `captures/` holds the raw responses this repo was built against (storefront
+# HTML, menu, grid and productsArray JSON from www.bershka.com). It is
 # EVIDENCE, kept on disk so a claim in the README can be re-checked, but it
 # is not repo content -- the fixtures the test suite actually runs against
-# are trimmed, scrubbed excerpts embedded in smoke_test.py, per CLAUDE.md
-# §10. A committed capture would also carry whatever per-visitor state the
-# page happened to hold.
+# are trimmed, scrubbed excerpts embedded in smoke_test.py. A committed
+# capture would also carry whatever per-visitor state the page happened to
+# hold.
 captures/

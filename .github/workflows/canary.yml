@@ -6,32 +6,21 @@ name: canary
 # workflow is the other half — a real run, against the real API, on a
 # schedule.
 #
-# WHAT THIS SITE DOES TO A RUNNER, AND WHY THIS CANARY CAN SKIP
+# WHAT THIS SITE DOES TO A RUNNER
 # ------------------------------------------------------------------------
-# This edge refuses by ADDRESS. Measured 2026-09-19 from a residential
-# address: every URL on this host answered HTTP 403 in 195 bytes,
-# /robots.txt included, carrying `x-reference-error` and
-# `akamai-cache-status: Error from child`. Through a proxy the same URLs
-# answered 200. Nothing about that 403 is a challenge to solve or wait out.
+# This edge refuses by ADDRESS: a refused address gets HTTP 403 in 195 bytes,
+# /robots.txt included, carrying `x-reference-error`. A bare GitHub runner's
+# address has been SERVED on every scheduled run so far (first dispatch
+# 2026-09-20; daily 2026-09-30 to 2026-10-14, the last one 139 rows,
+# `complete`). So this canary needs no secret, and it does not pretend
+# otherwise:
 #
-# MEASURED 2026-09-20, first dispatch: a bare GitHub runner's address was
-# NOT refused. With no proxy secret configured the run reached the API and
-# read `store 44009506 catalog 40259534 GB GBP` in three requests. So this
-# canary does its job without a secret, and the skip path below is insurance
-# against a future refusal rather than the normal case. One observation, on
-# one runner, on one morning — the rule below deliberately does not depend on
-# it holding:
-#
-#   * If BERSHKA_PROXY (or BERSHKA_CDP_ENDPOINT) is configured, the run goes
-#     through it — the repo's documented default path — and a refusal is a
-#     REAL failure worth a red check.
-#   * If neither is configured, a refusal is a fact about that runner's
-#     address, which nobody in this repo can fix, so the job SKIPS with a
-#     ::notice:: instead of going red. A check that goes red for a reason
-#     nobody can act on is a check everyone learns to ignore.
-#
-# Every other exit code is still interpreted and still turns this red, so a
-# payload change cannot hide behind the skip.
+#   * There is NO skip path. Exit 3 (refused), exit 4 (zero rows), exit 5
+#     (content never obtained) and exit 6 (partial) all turn it red, because
+#     a canary that goes green without reading the site tests nothing.
+#   * If BERSHKA_PROXY is configured, the run goes through it instead; it is
+#     optional, and a refusal is red either way. If the runner's address is
+#     ever refused, the fix is to add that secret -- the red check says so.
 #
 # It runs `api_scraper.py`, the repo's primary engine: no browser to install,
 # and it exercises the whole route — store config, menu, grid, productsArray
@@ -56,7 +45,6 @@ jobs:
       # `secrets` is not available in a job-level `if`, so presence is tested
       # here, once, and read from each step's `if` and shell below. These are
       # the strings "true"/"false", never the secret itself.
-      HAVE_CDP: ${{ secrets.BERSHKA_CDP_ENDPOINT != '' }}
       HAVE_PROXY: ${{ secrets.BERSHKA_PROXY != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -75,11 +63,9 @@ jobs:
       - name: Say which path this run is taking
         run: |
           if [ "$HAVE_PROXY" = "true" ]; then
-            echo "::notice::Running through BERSHKA_PROXY — the repo's documented default path. A refusal here is a real failure."
-          elif [ "$HAVE_CDP" = "true" ]; then
-            echo "::notice::BERSHKA_CDP_ENDPOINT is set but api_scraper.py does not use it; this run goes out from the bare runner. A refusal will SKIP rather than fail."
+            echo "::notice::Running through BERSHKA_PROXY."
           else
-            echo "::notice::Running from a bare runner with no exit configured. If this address is refused, the job SKIPS rather than failing — see this workflow's header."
+            echo "::notice::Running from the bare runner (no BERSHKA_PROXY secret; none is needed while this address is served). A refusal is a red check, not a skip."
           fi
 
       - name: Scrape a real category through the catalogue API
@@ -129,33 +115,24 @@ jobs:
           CODE: ${{ steps.run.outputs.exit_code }}
         run: |
           code="$CODE"
-          skipped=false
           case "$code" in
             0)   echo "OK — rows parsed from a live run." ;;
             3)   if [ "$HAVE_PROXY" = "true" ]; then
-                   echo "::error::Refused before parsing (exit 3) while running through BERSHKA_PROXY. That is the documented default path failing, not the runner's address. A 195-byte 403 with x-reference-error means the EXIT was refused — check the proxy credentials and whether that exit's address is still accepted — before looking at product_parser.is_edge_refusal()."
+                   echo "::error::Refused before any rows were read (exit 3) while running through BERSHKA_PROXY. A 195-byte 403 with x-reference-error means the EXIT was refused — check the proxy credentials and whether that exit's address is still accepted."
                  else
-                   # No exit configured, so this went out from the runner. The
-                   # edge refuses by address and nothing in this repo can
-                   # change the runner's address, so this must not paint the
-                   # check red.
-                   echo "::notice::SKIPPED: this runner's address was refused before anything was parsed (exit 3), and no BERSHKA_PROXY secret is configured to route around it. This edge refuses by address — see the header — so that is a property of the runner, not of the site or of this scraper. Set BERSHKA_PROXY to have this run go out through an accepted exit, and to make a refusal here a real failure."
-                   skipped=true
-                   code=0
+                   echo "::error::Refused before any rows were read (exit 3) from the bare runner. This edge refuses by address; nothing was tested. Add a BERSHKA_PROXY repository secret (an exit this edge accepts) so the canary can reach the site."
                  fi ;;
-            4)   echo "::error::Ran fine but wrote 0 rows (exit 4). Look at the log line naming the grid BEFORE blaming the parser: a grid that lists no products is a real and legitimate answer, and this workflow shipped once pointed at exactly such a grid. If the grid did list products, the payload shape changed — product_parser.parse_products_array()'s docstring says what it is expected to be." ;;
-            5)   echo "::error::Remote error (exit 5). With BERSHKA_PROXY set that is the proxy or its credentials; with none configured, nothing here should have called a remote service at all and the run log is where to start." ;;
+            4)   echo "::error::Every request was answered but the grid listed nothing (exit 4). Look at the log line naming the grid BEFORE blaming the parser: a grid that lists no products is a real and legitimate answer, and this workflow shipped once pointed at exactly such a grid. If the grid did list products, the payload shape changed — product_parser.parse_products_array()'s docstring says what it is expected to be." ;;
+            5)   echo "::error::Zero rows and the content was never obtained (exit 5): requests kept failing, a response was not the JSON its endpoint promises, or the payload listed products and parsed to none (parser_found_nothing). The log names each failed URL and why." ;;
             6)   echo "::error::Partial run (exit 6) — the run stopped early. canary_run.meta.json names the stop reason." ;;
             2)   echo "::error::Bad usage (exit 2) — this workflow's own arguments are wrong, not the site." ;;
             *)   echo "::error::Unexpected exit code $code (see the step above for the traceback)." ;;
           esac
-          echo "skipped=$skipped" >> "$GITHUB_OUTPUT"
           test "$code" = "0"
 
       - name: Check the scraped data with the repo's own checks
-        # Nothing was fetched on the skip path, so there is nothing to check.
-        if: steps.verdict.outputs.skipped != 'true'
-        # CLAUDE.md §11: this step CALLS the shipped checks and does not
+        # Row floor, complete status, non-null core columns, one row per SKU.
+        # This step CALLS the shipped checks and does not
         # re-implement them. `--sample-check` is the schema and fabrication
         # check; `--run-check` is the row floor, the metadata and the
         # one-row-per-SKU invariant. Both live in .github/ci_checks.py, run

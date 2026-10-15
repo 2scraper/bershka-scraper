@@ -54,7 +54,10 @@ import browser_bridge
 import env_config
 import product_parser as P
 import proxy_pool
-from catalog_walk import EdgeRefusal, Fetched, RobotsRefusal, WalkResult, crawl, load_store
+from catalog_walk import (EdgeRefusal, Fetched, HttpError, RobotsRefusal,
+                          SchemaError, TransportError, WalkResult, _get,
+                          _json_or_raise, check_parsed, crawl, listed_products,
+                          load_store)
 from output_writer import (EXIT_BLOCKED, EXIT_REMOTE_API_ERROR, Product,
                            finish_run, scope_fingerprint)
 
@@ -223,24 +226,32 @@ def run_product_mode(args, fetch, store: P.StoreConfig) -> WalkResult:
     There is no separate detail endpoint worth calling: productsArray already
     returns the whole colour and size tree, so `--mode product` differs from
     `--mode category` only in how the id list is chosen.
+
+    The request goes through `catalog_walk._get` and `_json_or_raise`, like
+    every listing request, so a 5xx, a dropped connection or an HTML page at
+    HTTP 200 is a named failure (exit 5) rather than "product not found"
+    (exit 4). Only the API's own `_ERR_PRODUCT_NOT_FOUND` record says the
+    product is gone.
     """
     result = WalkResult(store=store)
     url = P.products_array_url(store.store_id, store.catalog_id, [args.product_id])
-    if not P.is_robots_allowed(url):
-        raise RobotsRefusal(url)
-    got = fetch(url)
-    result.requests_made += 1
-    result.bytes_read += len(got.body or b"")
-    if P.is_edge_refusal(got.status, got.text[:4000], got.headers):
-        raise EdgeRefusal(f"HTTP {got.status} from the edge for a product request")
+    try:
+        got = _get(fetch, url, result)
+        _json_or_raise(got, url, "products")
+    except (HttpError, SchemaError, TransportError) as exc:
+        result.record_failure(type(exc).__name__, url, str(exc),
+                              getattr(exc, "status", None))
+        return result.settle()
     parsed = P.parse_products_array(got.body, store, locale=args.site_locale)
     result.rows = parsed.rows
     result.payload_errors = parsed.errors
     result.duplicate_bundles = parsed.duplicate_bundles
     result.products_requested = 1
-    if not parsed.rows and parsed.errors:
+    if not parsed.rows and parsed.errors and not listed_products(got.body):
         result.stop_reason = "product_not_found"
-    return result
+    else:
+        check_parsed(got.body, parsed, url, result)
+    return result.settle()
 
 
 def scrape(args) -> int:

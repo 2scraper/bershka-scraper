@@ -335,7 +335,7 @@ def main() -> int:
     # same CLI > env > .env > default precedence every other entry point in
     # this repo uses -- this file used to be the one CLI that skipped it,
     # which meant `python3 fingerprint_client.py` (the first thing to run
-    # when a key "isn't working", per CLAUDE.md) could not see a .env-only
+    # when a key "isn't working") could not see a .env-only
     # key at all.
     p.add_argument("--key", default=None,
                    help="API key. Falls back to $TWOCAPTCHA_KEY via .env/"

@@ -5,6 +5,8 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-15
+
 > **Exit codes changed.** A run that ends with zero rows now exits **5**
 > ("the content was never obtained") when requests kept failing, a response
 > was not the JSON its endpoint promises, the payload listed products and
@@ -73,7 +75,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 * The Dockerfile and README describe the image as it is (entrypoint
   `api_scraper.py`, Chromium also installed).
 
-### Changed (merged after 1.0.2)
+### Changed
 
 * Each engine imports its driver at module level, so CI's per-engine import
   check can fail (#1).

@@ -12,28 +12,22 @@ body:
 
         A few things answer most reports faster than we can:
 
-        - **Exit 3 (blocked)?** This repo's own research found no captcha,
-          proxy or browser challenge anywhere on this site from a plain
-          datacentre fetch (see `scraper_api_client.py`'s docstring and
-          `.env.example`) — so exit 3 here usually means something upstream
-          really changed, not that a proxy or `--twocaptcha-key` is missing.
-          Check `product_parser.detect_bot_challenge()` / `BOT_CHALLENGE_MARKERS`
-          against what the page actually returned.
-        - **Only one page of products?** That is by design: this site's
-          listing paging (`?start=N&sz=25`) is disallowed by its own
-          robots.txt, so a listing run is a single fetch. To cover a whole
-          locale, read its `sitemap_0-product.xml` and run `--mode product`
-          over it — see the README's "Covering a whole locale".
-        - **Every price is `null`?** Check the locale. `/int/en/` and `/ru/`
-          are showcase storefronts that publish no prices at all, and their
-          tiles still carry `data-currency="USD"`, which this parser
-          deliberately does not read.
-        - **A price looks like a per-kilo figure?** The `gb` tiles render
-          `£41.00 (£1,025.00/Kg)`. The parenthesised unit price is stripped
-          before matching — if one is getting through, say which product.
-        - **`sku` and the id in the URL disagree?** They are supposed to.
-          `sku` is the VARIANT id and the product URL carries the MASTER id;
-          one master covers every shade of a product.
+        - **Exit 3 (blocked)?** Almost always the EXIT ADDRESS: this edge
+          answers a refused address with a ~195-byte 403 (`x-reference-error`
+          header), robots.txt included. A different exit fixes it; a captcha
+          key does not — no captcha has been observed on this host. See the
+          README's "The exit decides whether anything works".
+        - **Exit 4 (nothing found)?** Read the log line naming the grid. A
+          menu entry can be a "view all" parent that lists no products of its
+          own; `--list-categories` shows every grid and its trail.
+        - **Exit 5?** The content was never obtained — a request kept
+          failing, or a response was not the JSON the endpoint promises. The
+          log names each failed URL and why.
+        - **Exit 6?** Some grids or batches failed; the rows that were read
+          are written, and `<out>.meta.json` lists the failed URLs.
+        - **Many rows for one product?** By design: a row is one SKU, a
+          (product, colour, size) triple. `product_id` is the id the product
+          URL carries.
 
   - type: dropdown
     id: engine
@@ -79,9 +73,9 @@ body:
     attributes:
       label: Exit code
       description: >-
-        `echo $?` straight after the run. These mean specific things — 3 is a
-        challenge page, 4 is "ran fine, found nothing", 6 is a partial run.
-        The table is in the README.
+        `echo $?` straight after the run. These mean specific things — 3 is
+        refused, 4 is a true empty answer, 5 is "the content was never
+        obtained", 6 is a partial run. The table is in the README.
       placeholder: "4"
     validations:
       required: true

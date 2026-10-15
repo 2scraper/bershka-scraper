@@ -8,9 +8,8 @@ The route through Bershka's catalogue, with the transport left out.
 Every engine in this repo walks the same four steps — store config, menu,
 grid, productsArray — and they differ only in how a URL becomes bytes. So the
 walk lives here once and each engine hands it a `fetch` callable. That is not
-tidiness for its own sake: the sibling repos each carry four copies of their
-crawl, one per engine, and CLAUDE.md §11 is in the template because a copy of
-a check is a check that drifts.
+tidiness for its own sake: a copy of the crawl per engine is a copy that
+drifts, and the engines would then disagree about the same response.
 
 A `fetch` is::
 
@@ -63,6 +62,13 @@ class RobotsRefusal(RuntimeError):
 
 class EdgeRefusal(RuntimeError):
     """The exit address was refused. Retrying from the same exit is pointless."""
+
+
+class FatalFetchError(RuntimeError):
+    """The transport itself refused the task in a way a retry cannot fix --
+    e.g. a paid fetch API answering 402 (out of balance) or 422. Raised by a
+    `fetch` and passed straight through `_get`: retrying it would only bill
+    the same refusal again."""
 
 
 class HttpError(RuntimeError):
@@ -137,10 +143,19 @@ class WalkResult:
         `completed` is a claim that everything asked for was seen. If any
         request failed, that claim is false however many rows came back, and
         `requests_failed` is not in `output_writer.COMPLETE_STOP_REASONS`, so
-        the run is written as partial and exits 6 instead of 0.
+        the run is written as partial and exits 6 instead of 0 -- or, with no
+        rows at all, exits 5 rather than claiming the category was empty.
+
+        When the ONLY failures are payloads that were served, listed products
+        and still parsed to nothing, the reason is `parser_found_nothing`:
+        that is this repo's bug or a changed payload shape, not the site
+        refusing anything, and it deserves its own name in the sidecar.
         """
         if self.failures and self.stop_reason == "completed":
-            self.stop_reason = "requests_failed"
+            kinds = {f.get("kind") for f in self.failures}
+            self.stop_reason = ("parser_found_nothing"
+                                if kinds == {"parser_found_nothing"}
+                                else "requests_failed")
         return self
 
 
@@ -183,7 +198,7 @@ def _get(fetch: Callable[[str], Fetched], url: str, result: WalkResult,
     for attempt in range(retries + 1):
         try:
             got = fetch(url)
-        except (RobotsRefusal, EdgeRefusal):
+        except (RobotsRefusal, EdgeRefusal, FatalFetchError):
             raise
         except Exception as exc:  # noqa: BLE001 — named, not swallowed
             last = TransportError(f"{type(exc).__name__}: {exc}", url)
@@ -238,6 +253,42 @@ def _json_or_raise(got: Fetched, url: str, required: str) -> Any:
             f"HTTP {got.status} for {url} is JSON but has no {required!r} "
             f"(keys: {sorted(data)[:8]})", url)
     return data
+
+
+def listed_products(body: Any) -> int:
+    """How many entries a productsArray payload holds that are NOT the API's
+    own per-product error records -- i.e. how many products it states."""
+    data = P._as_json(body)
+    entries = data.get("products") if isinstance(data, dict) else data
+    count = 0
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("key") in P.ERROR_KEYS or (
+                entry.get("id") is None and "description" in entry):
+            continue
+        count += 1
+    return count
+
+
+def check_parsed(body: Any, parsed: "P.ProductsResult", url: str,
+                 result: WalkResult) -> None:
+    """Record a served payload that states products and parses to no rows.
+
+    A batch whose every bundle was already emitted by an earlier batch is
+    legitimately rowless (`duplicate_bundles` counts those), so only a
+    payload with listed products, zero rows AND zero duplicates is a parser
+    failure. Without this the run reported "the category is empty" -- exit 4
+    -- for a response that plainly listed products.
+    """
+    if parsed.rows or parsed.duplicate_bundles:
+        return
+    stated = listed_products(body)
+    if stated:
+        result.record_failure(
+            "parser_found_nothing", url,
+            f"the payload lists {stated} product(s) and parsed to 0 rows -- "
+            f"the payload shape may have changed")
 
 
 def load_store(fetch: Callable[[str], Fetched], store_id: int,
@@ -400,6 +451,7 @@ def walk_grids(fetch: Callable[[str], Fetched], store: P.StoreConfig,
                 bundle_entries=bundle_entries)
             result.payload_errors.extend(parsed_products.errors)
             result.duplicate_bundles += parsed_products.duplicate_bundles
+            check_parsed(got.body, parsed_products, url, result)
             for row in parsed_products.rows:
                 if row.sku and row.sku in seen_sku:
                     continue

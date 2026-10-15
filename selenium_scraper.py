@@ -46,8 +46,8 @@ from output_writer import EXIT_REMOTE_API_ERROR, RemoteAPIError
 # At module level, deliberately, and not inside start(). The offline suite
 # guards `import selenium_scraper` behind try/except ImportError and REPORTS the skip,
 # and CI's engine-smoke job imports this module with selenium installed. Both
-# only mean something if importing this module actually requires the driver
-# (CLAUDE.md §10). Imported inside start(), the module loaded cleanly with no
+# only mean something if importing this module actually requires the driver.
+# Imported inside start(), the module loaded cleanly with no
 # selenium at all, so neither check could ever fail.
 from selenium import webdriver  # noqa: E402
 from selenium.webdriver.chrome.options import Options  # noqa: E402

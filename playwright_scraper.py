@@ -36,8 +36,8 @@ from output_writer import EXIT_REMOTE_API_ERROR, RemoteAPIError
 # At module level, deliberately, and not inside start(). The offline suite
 # guards `import playwright_scraper` behind try/except ImportError and REPORTS the skip,
 # and CI's engine-smoke job imports this module with playwright installed. Both
-# only mean something if importing this module actually requires the driver
-# (CLAUDE.md §10). Imported inside start(), the module loaded cleanly with no
+# only mean something if importing this module actually requires the driver.
+# Imported inside start(), the module loaded cleanly with no
 # playwright at all, so neither check could ever fail.
 from playwright.sync_api import sync_playwright  # noqa: E402
 

@@ -39,8 +39,10 @@ ENV_KEYS = {
     "TWOCAPTCHA_KEY": "twocaptcha_key",
     "BERSHKA_CDP_ENDPOINT": "cdp_endpoint",
     "BERSHKA_PROXY": "proxy",
-    "BERSHKA_URL": "url",
 }
+# Deliberately NOT here: a start URL. No engine in this repo takes `--url` --
+# every request is built from the store id and the menu -- so a variable
+# mapped onto one would be accepted, documented and do nothing.
 # Deliberately NOT here: an output prefix. `--out` already carries a non-empty
 # default, so `apply()` would never see it as unset and the variable would be
 # silently ignored — a setting that looks configurable and is not.
@@ -66,10 +68,7 @@ _PLACEHOLDERS = {
 # a copied example reads as CONFIGURED: `cp .env.example .env` followed by a
 # run connects to cb.2captcha.com with the string `{login}-zone-...` as its
 # username and gets a 401 -- a confusing auth error a long way from its
-# cause. This exact defect shipped in this family's etsy-scraper and
-# mediamarkt-scraper (both of which use braced placeholders) and was absent
-# from amazon-scraper/farfetch-scraper only because neither of those uses
-# them -- see CLAUDE.md §17. Any `{...}` left in a value is unset here,
+# cause. Any `{...}` left in a value is unset here,
 # named rather than quoted in the warning, since the value can be a
 # credentialled URL.
 _BRACED_PLACEHOLDER_RE = re.compile(r"\{[^{}]+\}")

@@ -332,7 +332,7 @@ pinning it:
 
 | engine | transport | needs |
 |---|---|---|
-| **`api_scraper.py`** | plain HTTPS | a proxy |
+| **`api_scraper.py`** | plain HTTPS | an exit address the edge accepts — a proxy if yours is refused |
 | `playwright_scraper.py` | Playwright | a browser or a CDP endpoint |
 | `puppeteer_scraper.py` | pyppeteer | same |
 | `selenium_scraper.py` | Selenium | a browser it launches itself |
@@ -341,7 +341,9 @@ pinning it:
 `api_scraper.py` is the one to run. The catalogue API answered **HTTP 200 to
 a plain `requests` call** through a proxy — no browser, no cookie jar, no TLS
 impersonation, checked twice and once with impersonation explicitly disabled.
-A browser buys nothing here except an exit and a cookie jar the API does not
+Whether you need the proxy depends on your address, not on the engine: the
+daily canary runs it from a bare GitHub runner with no proxy and was served
+(2026-10-14: 139 rows, `complete`). A browser buys nothing here except an exit and a cookie jar the API does not
 ask for.
 
 The browser engines are kept for two narrow reasons: an operator may have a
@@ -372,8 +374,7 @@ loader. Never a command line: `ps` reads argv.
 |---|---|
 | `TWOCAPTCHA_KEY` | `scraper_api_client.py`, the solver fallback, the tools |
 | `BERSHKA_PROXY` | every engine that picks its own exit |
-| `BERSHKA_CDP_ENDPOINT` | the three browser engines |
-| `BERSHKA_URL` | optional override |
+| `BERSHKA_CDP_ENDPOINT` | the three browser engines (not the Scraper API client: pass `--cdp-url` there explicitly) |
 
 `.env.example` documents each one and is the file the test suite compares the
 key set against.
@@ -388,12 +389,17 @@ key set against.
 | 1 | crash |
 | 2 | bad usage |
 | 3 | blocked — the exit was refused, or robots disallows the URL |
-| 4 | ran fine, zero rows (which can be the correct answer) |
-| 5 | a remote service failed on its own terms |
-| 6 | partial run; `.meta.json` names the stop reason |
+| 4 | every request was answered and the answer was "nothing": an empty grid, a category that matched no menu trail, a product id the API reports as not found |
+| 5 | **zero rows and the content was never obtained** — requests kept failing (5xx, timeouts, dropped connections), a response was not the JSON its endpoint promises, a payload listed products and parsed to none (`parser_found_nothing`), or a remote service of this project's own (the Scraper API, a Scraping Browser connect, the Fingerprint API) failed |
+| 6 | partial run: some rows, then a failure; `.meta.json` names the stop reason |
 
 A run that finds nothing writes nothing rather than overwriting a good file
-with `[]`. Pass `--allow-empty` when empty is the expected answer.
+with `[]`. Pass `--allow-empty` when empty is the expected answer; it applies
+to exit 4 only — a zero-row FAILURE (3 or 5) never writes output or a
+sidecar, so the previous good run stays next to nothing that contradicts it.
+
+An edge refusal met part way through a walk is exit 3 when nothing had been
+read yet, and exit 6 when rows had — it no longer turns into exit 4.
 
 **Exit 6 is the one to wire an alert to.** Any request that failed — a 5xx, a
 429 that outlived its retries, a body that was not JSON, a timeout — is
@@ -436,9 +442,9 @@ docker run --rm --env-file .env bershka-scraper --category "WOMEN / Clothes / Je
 ```
 
 The image runs `api_scraper.py`, the primary engine here, so it is a
-`requests` install rather than a Chromium download. The browser engines are
-in it too and reachable with `--entrypoint`, but it deliberately carries no
-browser for them. CI builds the image on every push, because nothing else in
+entrypoint needs no browser. The image also carries Playwright and its
+Chromium, so `--entrypoint python3 … playwright_scraper.py` works too; CI
+checks that Chromium launches in it. CI builds the image on every push, because nothing else in
 a repo like this ever would.
 
 ---

@@ -1,43 +1,32 @@
 """
 output_writer.py
 -----------------
-Shared row model + JSON/CSV writers used by all three scrapers.
+Shared row model + JSON/CSV writers used by every engine in this repo.
 
 One kind of row
 ---------------
-Bershka is a catalogue, so this repo carries the family's ordinary
-single `Product` dataclass rather than the two classes transfermarkt-scraper
-needed for people and events. The first nine columns are the family prefix —
-`source`, `scraped_at`, `url`, `sku`, `title`, `image_url`, `price`,
-`currency`, `category` — so a consumer already written against another repo
-in this family reads them unchanged.
+Bershka is a catalogue, so this repo carries one `Product` dataclass. The
+first ten columns are the family prefix -- `source`, `scraped_at`, `url`,
+`sku`, `title`, `image_url`, `price`, `currency`, `category`,
+`price_source` -- so a consumer already written against another repo in this
+family reads them unchanged. Everything Bershka-specific is appended after
+them.
 
-`sku` is the VARIANT id (`P000476`), not the master/style id, because the
-variant is what is actually unique per row: a category tile, the PDP's own
-JSON-LD `sku`, and the tile's `data-pid` all agree on it, while one master id
-(`F20100269`) covers up to nineteen shades of the same lipstick. The master
-id is kept beside it in `master_id` — it is what the product URL carries, so
-a consumer needs both to get from a row back to a page.
+`sku` is the catalogue API's own `sizes[].sku`: one row per (product,
+colour, size), because that is the only identifier in the payload that is
+unique per row. See the comment on the field below for the measurement.
 
-Columns that are NOT here, and the measurements that removed them
-----------------------------------------------------------------
-- `lowest_price_30d`: the EU Omnibus 30-day-low disclosure CLAUDE.md §4
-  warns about. Measured 2026-09-18 over 317 tiles in 20 captures spanning
-  `us`, `gb`, `int/en`, `jp` and `ru`: zero occurrences of a second struck
-  price of any kind. The one struck price found is a LIST price ABOVE its
-  sale price (£134.00 against £105.20), which is what `original_price`
-  holds. Add the column back with a measurement showing the disclosure, not
-  by analogy with mediamarkt-scraper.
-- `description`: the PDP's JSON-LD carries one (several hundred words of
-  marketing copy). Deliberately not exported — it would dominate every CSV
-  row of a price-monitoring run. `product_parser.parse_product` reads the
-  JSON-LD whole, so a caller that wants it has it.
-- `rating` / `review_count`: the tiles carry a Bazaarvoice placeholder
-  (`pr-category-snippet`) that is EMPTY in server-rendered HTML — the widget
-  fills it client-side. Measured 0 populated ratings across the same 317
-  tiles. A column that is null on every row of every run should not exist.
+Columns that are NOT here
+-------------------------
+- `rating` / `review_count`: the catalogue API publishes neither, and a
+  column that is null on every row of every run should not exist.
+- `description`: not part of the grid / productsArray payload this repo
+  reads; adding it would mean a request per product.
+- a 30-day-lowest-price column: no such figure appears in the productsArray
+  payload. `original_price` is the API's own `oldPrice`.
 """
 
+import contextlib
 import csv
 import hashlib
 import json
@@ -153,9 +142,8 @@ ROW_CLASS_BY_MODE = {
 }
 
 # Modes whose rows are one-per-sku, and therefore safe to dedupe on `sku` and
-# to hand to diff_runs.py. Both qualify, and deduping is not theoretical
-# here: one `gb` listing served the same tile twice (`F20100141`, 25 tiles
-# over 24 distinct ids, measured 2026-09-18).
+# to hand to diff_runs.py. Both qualify: a product can sit in several grids,
+# and the walk dedupes on `sku` across all of them.
 UNIQUE_BY_SKU_MODES = ("category", "product")
 
 
@@ -184,7 +172,7 @@ def dedupe_by_sku(rows: Sequence[Any], seen: Set[str]) -> List[Any]:
     return dedupe_by_key(rows, seen, key="sku")
 
 
-# CSV cannot hold a list (nationalities). Joining with " | " keeps the cell
+# CSV cannot hold a list (`related_categories`, `categories`). Joining with " | " keeps the cell
 # readable in a spreadsheet and round-trippable by splitting on the same
 # separator; the JSON output keeps the real list.
 LIST_CSV_SEPARATOR = " | "
@@ -193,24 +181,73 @@ LIST_CSV_SEPARATOR = " | "
 def _csv_value(v: Any) -> Any:
     if isinstance(v, (list, tuple)):
         return LIST_CSV_SEPARATOR.join(str(x) for x in v)
+    if isinstance(v, dict):
+        return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
     return v
 
 
-def _atomic(path: str, write: Any) -> None:
+# A spreadsheet treats a cell beginning with one of these as a FORMULA rather
+# than as text. Every string column here (titles, colour names, category
+# trails) is text the site's merchandisers wrote, not this code, so a CSV
+# opened in Excel, LibreOffice or Google Sheets must not execute it. The tab
+# and the line breaks are here because some readers strip a leading one and
+# expose whatever follows it.
+CSV_FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+# Prefixed to such a cell. Spreadsheets read a leading apostrophe as "the
+# rest is text" and do not display it; a program reading the CSV with `csv`
+# sees it, which is why the count goes into the sidecar.
+CSV_FORMULA_ESCAPE = "'"
+
+
+def _csv_escape(v: Any):
+    """Neutralise a formula-shaped cell. Returns `(value, was_escaped)`.
+
+    Only STRINGS are touched: escaping a number would turn `-5` into the text
+    `'-5` and break every sum over the column. CSV only -- the JSON output
+    keeps the site's bytes exactly, and `csv_cells_escaped` in the sidecar
+    declares that the two files differ.
+    """
+    if isinstance(v, str) and v.startswith(CSV_FORMULA_LEADS):
+        return CSV_FORMULA_ESCAPE + v, True
+    return v, False
+
+
+@contextlib.contextmanager
+def _atomic(path: str, newline: Optional[str] = None):
     """Write through a temporary file in the same directory, then replace.
 
-    The three outputs used to be written straight to their final names, so a
-    failure between them — a full disk, an interrupt — left a fresh JSON
-    beside yesterday's CSV and a metadata sidecar describing neither. Nothing
-    downstream could tell. `os.replace` is atomic on the same filesystem, so
-    a reader sees either the old file or the new one.
+    `open(path, "w")` truncates before a byte is written, so a crash, a kill
+    or a full disk half way through left a shorter file where yesterday's
+    good one was -- and the three outputs could disagree with each other.
+
+    * The temporary file sits in the TARGET's directory: `os.replace` is
+      atomic only within one filesystem.
+    * `flush` + `fsync` before the rename, so the content is durable and not
+      merely visible.
+    * Mode: `NamedTemporaryFile` creates 0600 and a rename keeps that, which
+      would make every output owner-only. An existing target keeps its own
+      mode (someone may have set it on purpose); a new one gets what
+      `open()` would have given it, `0o666 & ~umask`.
+    * On any exception the temporary file is removed and the old target is
+      left untouched.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
-    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="",
-                                         dir=directory, delete=False)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", newline=newline, dir=directory,
+        prefix=os.path.basename(path) + ".", suffix=".tmp", delete=False)
     try:
         with handle:
-            write(handle)
+            yield handle
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            mode = os.stat(path).st_mode & 0o777
+        except OSError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(handle.name, mode)
         os.replace(handle.name, path)
     except BaseException:
         try:
@@ -221,48 +258,59 @@ def _atomic(path: str, write: Any) -> None:
 
 
 def write_json(rows: Sequence[Any], path: str) -> None:
-    _atomic(path, lambda f: json.dump([asdict(r) for r in rows], f,
-                                      ensure_ascii=False, indent=2))
+    with _atomic(path) as f:
+        json.dump([asdict(r) for r in rows], f, ensure_ascii=False, indent=2)
 
 
-def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> None:
-    # An empty result still gets the header row, from `row_cls` rather than
-    # the first row, so a mode that finds nothing still writes the columns
-    # that mode would have used.
+def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> int:
+    """Write the CSV and return how many cells were formula-escaped.
+
+    An empty result still gets the header row, from `row_cls` rather than
+    the first row, so a mode that finds nothing still writes its columns.
+    `newline=""` is the csv module's requirement and is passed through to
+    the temporary file, or every row gains a stray CR on Windows.
+    """
     fieldnames = [f.name for f in fields(row_cls)]
-
-    def _write(f):
+    escaped = 0
+    with _atomic(path, newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
-            writer.writerow({k: _csv_value(v) for k, v in asdict(r).items()})
+            row = {}
+            for k, v in asdict(r).items():
+                # AFTER `_csv_value`: a list joined into one cell is text too,
+                # and its first element can be formula-shaped.
+                value, was_escaped = _csv_escape(_csv_value(v))
+                row[k] = value
+                escaped += was_escaped
+            writer.writerow(row)
+    return escaped
 
-    _atomic(path, _write)
 
-
-# Exit code used when a run completes but produced nothing.
+# Exit code for a run that asked and was told "nothing": the category or
+# product genuinely holds no rows.
 EXIT_NO_PRODUCTS = 4
 
-# Exit code for a run blocked by a bot-check/challenge page before parsing
-# even started.
+# Exit code for a run refused before it had any rows: the exit address was
+# refused by the edge, or robots.txt disallows the URL.
 EXIT_BLOCKED = 3
 
 # Exit code for a run that gathered SOME rows and then stopped early.
 EXIT_PARTIAL = 6
 
-# Exit code for a failure in one of THIS PROJECT's own 2Captcha-product calls
-# -- the Fingerprint API rejecting a request (bad key, bad --tags, rate
-# limit), or a Scraping Browser CDP connection failing (e.g. profile_locked)
-# -- as opposed to EXIT_BLOCKED (the TARGET SITE refusing a page) or an
-# uncaught crash (1). Per CLAUDE.md's family exit-code contract ("5" =
-# "remote API error"). Deliberately NOT what a captcha-solve failure gets:
-# per that same document's captcha section, a solver error is a WARNING that
-# lets the run continue (see captcha_solver.py and each engine's
-# handle_captcha_if_present) -- exit 5 is for calls the user explicitly
-# opted into (--fingerprint, --cdp-endpoint) where silently continuing
-# without them would hide a billing/plan/profile-lock problem rather than a
-# page the site declined to serve.
+# Exit code for a run that holds NOTHING because the content was never
+# obtained: a request that kept failing (5xx, timeout, dropped connection), a
+# response that was not the JSON the endpoint promises, a served payload that
+# parsed to zero rows, or one of this project's own remote calls (the
+# Fingerprint API, a Scraping Browser connect, the Scraper API) failing on its
+# own terms. Different from 4 on purpose: 4 is a fact about the catalogue, 5
+# says nothing can be concluded about it from this run. A run that gathered
+# rows and THEN failed is 6, never 5.
+#
+# A captcha-solve failure is not on this list: it is a warning, the run
+# continues, and the page it was meant to clear decides the outcome.
 EXIT_REMOTE_API_ERROR = 5
+EXIT_FETCH_FAILED = EXIT_REMOTE_API_ERROR
 
 
 class RemoteAPIError(RuntimeError):
@@ -287,7 +335,8 @@ def write_run_meta(out_prefix: str, meta: dict) -> str:
     there, the JSON and CSV beside it are the ones it describes.
     """
     path = f"{out_prefix}.meta.json"
-    _atomic(path, lambda f: json.dump(meta, f, ensure_ascii=False, indent=2))
+    with _atomic(path) as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
     print(f"[+] Wrote run metadata -> {path} (status={meta.get('status')})")
     return path
 
@@ -333,9 +382,14 @@ def run_meta(status: str, stop_reason: str, pages_requested: int,
              pages_completed: int, start_url: str, final_url: str,
              products: int, pages_failed: Optional[List[int]] = None,
              mode: str = "category", source: str = SOURCE_DEFAULT,
-             scope: Optional[dict] = None) -> dict:
-    """Build the metadata dict for a finished run."""
-    return {
+             scope: Optional[dict] = None,
+             extra: Optional[dict] = None) -> dict:
+    """Build the metadata dict for a finished run.
+
+    `extra` is merged at the top level; a run field wins a name collision, so
+    a caller cannot overwrite `status` by accident.
+    """
+    meta = {
         "source": source,
         "mode": mode,
         "status": status,
@@ -349,15 +403,23 @@ def run_meta(status: str, stop_reason: str, pages_requested: int,
         "final_url": final_url,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
+    if extra:
+        meta.update({k: v for k, v in extra.items() if k not in meta})
+    return meta
 
 
 def save(rows: Sequence[Any], out_prefix: str, fmt: str,
-         allow_empty: bool = False, row_cls: Type = Product) -> int:
+         allow_empty: bool = False, row_cls: Type = Product,
+         stats: Optional[dict] = None) -> int:
     """Write JSON/CSV and return a process exit code.
 
-    On zero rows, nothing is written at all unless `allow_empty` — see the
-    family invariant in CLAUDE.md §8: a run that finds nothing must not
-    silently replace yesterday's good output with an empty file.
+    On zero rows, nothing is written at all unless `allow_empty`: a run that
+    finds nothing must not silently replace the previous good output with an
+    empty file, because a consumer cannot tell an empty category from a
+    failed run.
+
+    The number of formula-escaped CSV cells is reported through `stats`
+    rather than the return value, because the return value IS the exit code.
     """
     if not rows and not allow_empty:
         print(f"[!] 0 rows — refusing to write {out_prefix}.json/.csv, so an "
@@ -369,8 +431,15 @@ def save(rows: Sequence[Any], out_prefix: str, fmt: str,
         write_json(rows, f"{out_prefix}.json")
         print(f"[+] Saved {len(rows)} row(s) -> {out_prefix}.json")
     if fmt in ("csv", "both"):
-        write_csv(rows, f"{out_prefix}.csv", row_cls=row_cls)
+        escaped = write_csv(rows, f"{out_prefix}.csv", row_cls=row_cls)
         print(f"[+] Saved {len(rows)} row(s) -> {out_prefix}.csv")
+        if stats is not None:
+            stats["csv_cells_escaped"] = escaped
+        if escaped:
+            print(f"[!] {escaped} CSV cell(s) began with a formula character "
+                  f"and were prefixed with {CSV_FORMULA_ESCAPE!r} so a "
+                  f"spreadsheet reads them as text. The JSON output is "
+                  f"unchanged — see csv_cells_escaped in the sidecar.")
     return 0 if rows else EXIT_NO_PRODUCTS
 
 
@@ -378,36 +447,87 @@ def save(rows: Sequence[Any], out_prefix: str, fmt: str,
 COMPLETE_STOP_REASONS = ("completed", "pagination_exhausted", "no_new_products",
                          "single_page_mode")
 
+# Stop reasons under which ZERO rows is a true answer about the catalogue
+# rather than a failure to read it: every request succeeded, or the menu /
+# the product id itself said there was nothing to read. Only these may end a
+# zero-row run with EXIT_NO_PRODUCTS.
+EMPTY_ANSWER_STOP_REASONS = COMPLETE_STOP_REASONS + (
+    "no_grid_matched_category", "menu_listed_no_grids", "product_not_found")
+
+# Stop reasons that mean the site refused this run's exit. With no rows they
+# are exit 3 even when the engine did not raise, because the walk records an
+# edge refusal met mid-run on its result instead of raising it away.
+BLOCKED_STOP_REASONS = ("edge_refusal", "robots_refusal")
+
 
 def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
                allow_empty: bool, *, blocked: bool, stop_reason: str,
                pages_requested: int, pages_completed: int,
                start_url: str, final_url: str,
-               pages_failed: Optional[List[int]] = None,
+               pages_failed: Optional[List[Any]] = None,
                mode: str = "category", source: str = SOURCE_DEFAULT,
-               scope: Optional[dict] = None) -> int:
+               scope: Optional[dict] = None,
+               extra: Optional[dict] = None) -> int:
     """Write output + the run-metadata sidecar; return the exit code.
 
-    Shared by all three browser engines so the status/exit-code mapping
-    cannot drift between them. See mediamarkt-scraper's output_writer.py for
-    the full rationale; the logic here is unchanged.
+    Shared by every engine so the status/exit-code mapping cannot drift:
+
+        rows, complete              0
+        rows, not complete          6  (partial; output written)
+        no rows, refused            3
+        no rows, a true empty       4  (only for EMPTY_ANSWER_STOP_REASONS)
+        no rows, anything else      5  (the content was never obtained)
+
+    The zero-row branch is keyed on an allowlist of EMPTY answers, not on a
+    list of failures: a stop reason nobody has named yet falls through to
+    "nothing can be concluded" (5), never to "the category is empty" (4).
+
+    The sidecar is written only when the row files are. A zero-row failure
+    writes nothing at all -- not even with `--allow-empty`, which exists for
+    a genuinely empty answer -- so the previous good output is not left next
+    to a "failed" sidecar that contradicts it.
     """
-    complete = stop_reason in COMPLETE_STOP_REASONS
+    complete = stop_reason in COMPLETE_STOP_REASONS and not pages_failed
     row_cls = ROW_CLASS_BY_MODE.get(mode, Product)
-    rc = save(rows, out_prefix, fmt, allow_empty=allow_empty, row_cls=row_cls)
+
+    if not rows:
+        if blocked or stop_reason in BLOCKED_STOP_REASONS:
+            print(f"[!] Refused before any rows were read ({stop_reason}) — "
+                  f"exit {EXIT_BLOCKED}. Nothing was written.")
+            return EXIT_BLOCKED
+        if stop_reason not in EMPTY_ANSWER_STOP_REASONS or pages_failed:
+            print(f"[!] Nothing was gathered and the run did not finish "
+                  f"({stop_reason}) — exit {EXIT_FETCH_FAILED}, NOT an empty "
+                  f"result (exit {EXIT_NO_PRODUCTS}). Nothing can be concluded "
+                  f"about the catalogue from this run, and nothing was written.")
+            return EXIT_FETCH_FAILED
+
+    write_stats: dict = {}
+    rc = save(rows, out_prefix, fmt, allow_empty=allow_empty, row_cls=row_cls,
+              stats=write_stats)
     wrote_output = bool(rows) or allow_empty
 
     if wrote_output:
-        status = "complete" if (rows and complete) else (
-            "partial" if rows else "failed")
+        # Zero rows reach here only as a true empty answer under
+        # --allow-empty: "complete" when every request succeeded, "empty"
+        # when the menu or the product id said there was nothing to read.
+        if rows:
+            status = "complete" if complete else "partial"
+        else:
+            status = "complete" if complete else "empty"
+        # Merged UNDER the caller's extra: an engine's own keys win, because
+        # a collision here would be housekeeping silently dropping site data.
+        if write_stats:
+            extra = {**write_stats, **(extra or {})}
         write_run_meta(out_prefix, run_meta(
             status=status, stop_reason=stop_reason,
             pages_requested=pages_requested, pages_completed=pages_completed,
             pages_failed=pages_failed, mode=mode, source=source, scope=scope,
-            start_url=start_url, final_url=final_url, products=len(rows)))
+            start_url=start_url, final_url=final_url, products=len(rows),
+            extra=extra))
 
     if not rows:
-        return EXIT_BLOCKED if blocked else rc
+        return rc
     if not complete:
         print(f"[!] Partial run: stopped after {pages_completed} of "
               f"{pages_requested} page(s) ({stop_reason}). The output holds "

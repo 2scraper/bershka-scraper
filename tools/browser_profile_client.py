@@ -36,7 +36,7 @@ cannot tunnel anywhere and answers ERR_TUNNEL_CONNECTION_FAILED to every
 navigation. `connection` is the POST path, for when a custom proxy has to be
 attached to the request itself.
 
-Credentials come from `.env` via env_config (CLAUDE.md §3) -- never argv.
+Credentials come from `.env` via env_config -- never argv.
 Nothing secret is printed: logins, passwords and the assembled connection URI
 are shown as scheme://***:***@host:port, and `--write-env` puts the real URI
 straight into `.env` without it passing through the terminal.

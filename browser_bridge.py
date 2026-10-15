@@ -77,8 +77,8 @@ async (url) => {
 """
 
 
-# Global on purpose, not a single find/partition — see CLAUDE.md §8: a masker
-# that handles the first occurrence prints the password the other four times.
+# Global on purpose, not a single find/partition: a masker that handles the
+# first occurrence prints the password the other four times.
 #
 # This is NOT `proxy_pool.mask()`, and the difference was paid for live on
 # 2026-09-20. `mask()` parses its argument AS a URL and rebuilds it; handed an
@@ -159,7 +159,8 @@ def open_storefront(navigate: Callable[[str], Optional[int]],
                     locale: str = P.DEFAULT_LOCALE,
                     count: Optional[Callable[[str], int]] = None,
                     mode: str = "category",
-                    driver=None, args=None) -> str:
+                    driver=None, args=None,
+                    budget: Optional[page_flow.SolveBudget] = None) -> str:
     """Land on the storefront, waiting out a self-clearing challenge if one
     appears, and return the settled HTML.
 
@@ -194,7 +195,7 @@ def open_storefront(navigate: Callable[[str], Optional[int]],
 
     # Rung 2: only now, and only if rung 1 did not produce content.
     if driver is not None and not cleared:
-        if handle_challenge(driver, args, url):
+        if handle_challenge(driver, args, url, budget=budget):
             html = content() or html
             cleared = P.detect_page_state(html, 200, url=url) == "content"
     if not cleared:
@@ -260,13 +261,21 @@ def open_storefront(navigate: Callable[[str], Optional[int]],
 # nulls.
 
 
-def handle_challenge(driver, args, url: str, ready_selector: str = "") -> bool:
+def handle_challenge(driver, args, url: str, ready_selector: str = "",
+                     budget: Optional[page_flow.SolveBudget] = None) -> bool:
     """Rung 2. True if something was solved and the page was reloaded.
 
     Called only after rung 1 has had its chance. Returns False — not an
-    exception — when there is nothing to solve, no key to solve it with, or
-    the solve failed: every one of those leaves the caller holding whatever
-    the page already has, which `detect_page_state` then judges.
+    exception — when there is nothing to solve, no key to solve it with, the
+    URL's solve allowance is spent, or the solve failed: every one of those
+    leaves the caller holding whatever the page already has, which
+    `detect_page_state` then judges.
+
+    `budget` is the run's one `page_flow.SolveBudget`. Both call sites (the
+    storefront open and every API call's challenge hook) pass the SAME
+    object, and it is checked BEFORE the paid call, so a URL retried by
+    `catalog_walk._get` or met again after a rotation cannot buy a second
+    answer. Without it one URL bought three solves and a run had no cap.
     """
     if getattr(args, "solve_captcha", "when-blocked") == "never":
         logger.info("--solve-captcha never: not calling the solver for %s", url)
@@ -298,6 +307,12 @@ def handle_challenge(driver, args, url: str, ready_selector: str = "") -> bool:
             "%s detected via %s on %s, and no TWOCAPTCHA_KEY is set to solve "
             "it with. Continuing with whatever the page already holds.",
             challenge.kind, challenge.source, url)
+        return False
+
+    if budget is not None and not budget.spend(url):
+        logger.warning("%s detected on %s, but this URL's solve allowance "
+                       "(%d) is already spent; not buying another answer.",
+                       challenge.kind, url, budget.per_page)
         return False
 
     logger.warning("%s detected via %s (sitekey=%s) — the browser did not "
@@ -369,14 +384,18 @@ def run(args, driver) -> int:
         logger.error("could not start %s: %s: %s", driver.name, type(exc).__name__, exc)
         return EXIT_REMOTE_API_ERROR
 
+    # ONE allowance for the whole run, shared by both places that can pay.
+    budget = page_flow.SolveBudget()
     try:
         html = open_storefront(driver.navigate, driver.content, driver.sleep,
                                args.site_locale, count=driver.count,
-                               mode=args.mode, driver=driver, args=args)
+                               mode=args.mode, driver=driver, args=args,
+                               budget=budget)
         blob = store_from_storefront(html, args.site_locale)
         fetch = make_fetch(
             driver.evaluate,
-            on_challenge=lambda url: handle_challenge(driver, args, url))
+            on_challenge=lambda url: handle_challenge(driver, args, url,
+                                                      budget=budget))
 
         if args.mode == "product":
             from api_scraper import run_product_mode
@@ -418,33 +437,73 @@ def run(args, driver) -> int:
         start_url=start_url, final_url=P.BASE, mode=args.mode)
 
 
+def positive_int(text: str) -> int:
+    """argparse `type=` for a count that must be at least 1."""
+    import argparse
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}")
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
+def non_negative_float(text: str) -> float:
+    """argparse `type=` for a duration that may be 0 but not negative."""
+    import argparse
+    import math
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number, got {text!r}")
+    if value < 0 or not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"must be 0 or more, got {text}")
+    return value
+
+
+def unit_float(text: str) -> float:
+    """argparse `type=` for a score between 0 and 1."""
+    import argparse
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number, got {text!r}")
+    if not 0 <= value <= 1:
+        raise argparse.ArgumentTypeError(f"must be between 0 and 1, got {text}")
+    return value
+
+
 def add_core_arguments(p, default_out: str):
     """The flags EVERY engine in this repo shares.
 
     Defined once so `smoke_test.test_engine_parity` compares five engines
-    against one definition instead of five hand-kept copies — the same rule
-    CLAUDE.md §11 states for workflow steps, applied to a CLI.
+    against one definition instead of five hand-kept copies.
+
+    Every numeric flag goes through a validator that names the flag in an
+    argparse error (exit 2): a negative delay or timeout, or a zero cap,
+    used to be accepted and turned into a confusing run instead.
     """
     p.add_argument("--mode", choices=["category", "product"], default="category")
     p.add_argument("--category", default=None,
                    help="Match against the menu trail, e.g. 'WOMEN / SALE'.")
-    p.add_argument("--product-id", type=int, default=None,
+    p.add_argument("--product-id", type=positive_int, default=None,
                    help="For --mode product. This is the id a product URL "
                         "carries, NOT a sku.")
     p.add_argument("--site-locale", default=P.DEFAULT_LOCALE)
-    p.add_argument("--max-grids", type=int, default=None)
+    p.add_argument("--max-grids", type=positive_int, default=None)
     # `--max-products` counted ROWS, and a row is a SKU: one dress in 4
     # colours and 8 sizes is 32 of them. The help said so and the name still
     # misled, which is a bad trade. The old spelling keeps working so nothing
     # that already uses it breaks.
-    p.add_argument("--max-skus", "--max-products", type=int, default=None,
+    p.add_argument("--max-skus", "--max-products", type=positive_int, default=None,
                    dest="max_skus",
                    help="Stop once this many ROWS exist. A row is one SKU — "
                         "a (product, colour, size) triple — so one dress in 4 "
                         "colours and 8 sizes is 32 of them. To bound the work "
                         "by products, choose fewer grids with --max-grids.")
-    p.add_argument("--delay", type=float, default=0.5)
-    p.add_argument("--timeout", type=int, default=60)
+    p.add_argument("--delay", type=non_negative_float, default=0.5)
+    p.add_argument("--timeout", type=positive_int, default=60)
     p.add_argument("--format", choices=["json", "csv", "both"], default="both")
     p.add_argument("--out", default=default_out)
     p.add_argument("--allow-empty", action="store_true")
@@ -461,7 +520,7 @@ def add_proxy_arguments(p):
     p.add_argument("--proxy-rotate", choices=proxy_pool.ROTATE_MODES,
                    default="per-run")
     p.add_argument("--proxy-shuffle", action="store_true")
-    p.add_argument("--proxy-sessions", type=int, default=None)
+    p.add_argument("--proxy-sessions", type=positive_int, default=None)
     return p
 
 
@@ -482,7 +541,7 @@ def add_captcha_arguments(p):
                    help="when-blocked (default): only after the browser has "
                         "failed to clear it. always: also when content is "
                         "already present. never: no paid call at all.")
-    p.add_argument("--min-score", type=float, default=0.7,
+    p.add_argument("--min-score", type=unit_float, default=0.7,
                    help="reCAPTCHA v3 minimum score to ask the solver for.")
     return p
 

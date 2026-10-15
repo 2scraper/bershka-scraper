@@ -41,10 +41,7 @@ SAMPLE_FILES = ("sample_output.json", "sample_output.csv")
 
 # Phrases that show up in hand-written or template sample data. The point of
 # committing a sample is that it came from a real run; a placeholder teaches
-# readers field names and value shapes that do not exist. Kept generic
-# (rather than site-specific) on purpose: a real row here is a real
-# player or transfer, and there is no fixed set of "fake-looking" names to
-# check for the way an e-commerce sibling checks for "sample product".
+# readers field names and value shapes that do not exist.
 FABRICATION_MARKERS = ("sample-product-", "example brand", "sample product",
                        "product description text", "lorem ipsum",
                        "your_api_key", "123456789")
@@ -76,9 +73,41 @@ CREDENTIAL_ALLOWED = ("USER:PASS", "user:pass", "ACCOUNT:PASSWORD",
 
 # A 2captcha API key is a 32-character hex string.
 HEX32 = re.compile(r"\b[0-9a-f]{32}\b")
-HEX32_ALLOWED = ("sha", "hash", "nonce", "example", "md5", "digest", "checksum")
+# Words that make a 32-hex string on the same line a digest rather than a key.
+# Kept narrow on purpose: a line that merely says "example" or contains
+# "sha" inside another word ("shadow") used to exempt anything on it.
+HEX32_ALLOWED = ("sha1", "sha256", "sha-1", "sha-256", "hash", "nonce", "md5",
+                 "digest", "checksum")
 
-SCANNED_SUFFIXES = (".py", ".md", ".txt", ".yml", ".yaml", ".example")
+# Text files that can carry a credential. `.json` and `.csv` are here because
+# the committed sample output and any fixture are exactly where a pasted
+# value would land; a file with NO suffix (`Dockerfile`, a `.env.bak`-style
+# backup without one) is read too.
+SCANNED_SUFFIXES = (".py", ".md", ".txt", ".yml", ".yaml", ".example",
+                    ".json", ".csv", ".cfg", ".ini", ".toml", ".sh",
+                    ".bak", ".local", ".save", ".old", ".orig", ".hold", "")
+
+# Directories that are never repo content, matched against the path RELATIVE
+# to the repo root -- never the absolute path, or a clone that merely lives
+# under a directory called `venv` (or `build`, `tmp`...) scans nothing and
+# reports clean.
+SKIPPED_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules"}
+
+
+def _is_venv(directory: Path) -> bool:
+    """A virtualenv is recognised by the file that defines one, whatever the
+    directory is called: `python -m venv anything` writes `pyvenv.cfg`."""
+    return (directory / "pyvenv.cfg").is_file()
+
+
+def _is_env_backup(path: Path) -> bool:
+    """`.env.bak`, `.env.local`, `.env.save`... -- a copy of the credentials
+    file. Scanned EVEN IF gitignored: one `git add -f`, or a `.gitignore`
+    that lacks `.env*`, publishes it, and catching it on a local run is the
+    whole point. `.env` itself is not (it is supposed to hold the real key)
+    and `.env.example` is scanned like any tracked file."""
+    name = path.name
+    return name.startswith(".env.") and name != ".env.example"
 
 
 def git_ignored(paths):
@@ -119,11 +148,29 @@ def git_ignored(paths):
 
 def scanned_files():
     candidates = []
+    backups = []
+    venvs = set()
     for path in sorted(REPO.rglob("*")):
-        if not path.is_file() or path.suffix not in SCANNED_SUFFIXES:
+        if not path.is_file():
             continue
-        if any(part in {".git", "__pycache__", ".venv", "venv"}
-               for part in path.parts):
+        rel_parts = path.relative_to(REPO).parts
+        if any(part in SKIPPED_DIRS for part in rel_parts[:-1]):
+            continue
+        # Skip anything inside a virtualenv, found by its marker file. Walk
+        # the relative ancestors only: the repo root itself is never one.
+        inside_venv = False
+        for depth in range(1, len(rel_parts)):
+            ancestor = REPO.joinpath(*rel_parts[:depth])
+            if ancestor in venvs or _is_venv(ancestor):
+                venvs.add(ancestor)
+                inside_venv = True
+                break
+        if inside_venv:
+            continue
+        if _is_env_backup(path):
+            backups.append(path)
+            continue
+        if path.name == ".env" or path.suffix not in SCANNED_SUFFIXES:
             continue
         candidates.append(path)
 
@@ -138,9 +185,14 @@ def scanned_files():
             skipped += 1
             continue
         yield path
+    for path in backups:
+        yield path
     if skipped:
         print(f"note     {skipped} gitignored file(s) not scanned — they are "
               f"not committed, so they cannot leak through this repo")
+    if venvs:
+        print(f"note     {len(venvs)} virtualenv(s) not scanned "
+              f"(recognised by pyvenv.cfg)")
 
 
 def help_check():
@@ -170,9 +222,9 @@ def sample_check(prefix="sample_output"):
 
     `prefix` exists so the canary workflow can point this at the output of a
     real run instead of carrying its own copy of these assertions inline.
-    That is CLAUDE.md §11: a workflow step calls the shipped check. The
-    sibling repo's first push went red because `tests.yml` had re-implemented
-    a check instead, and the copy drifted.
+    A workflow step calls the shipped check rather than carrying its own
+    copy: a re-implemented check in a workflow drifts from this one, and
+    nothing local runs a workflow to notice.
     """
     failed = []
     names = (f"{prefix}.json", f"{prefix}.csv")
@@ -193,8 +245,8 @@ def sample_check(prefix="sample_output"):
 
     # The committed sample doubles as a schema test: rename a field in the code
     # and forget the sample, and this fails rather than the docs going stale.
-    # It is a --mode category sample from a PRICED locale, so it exercises
-    # every column a showcase-locale run would leave null.
+    # It is a --mode category sample from a real run, so it exercises every
+    # column the catalogue API fills.
     sys.path.insert(0, str(REPO))
     from dataclasses import asdict
 
@@ -247,7 +299,12 @@ def secret_check():
                 failed.append(f"{rel}:{lineno} contains {match[:6]}… — a "
                               f"32-char hex string, the shape of a 2captcha key")
 
-    if not failed:
+    # A scan that read nothing proves nothing, and used to print "ok" anyway
+    # (a clone under a directory called `venv` scanned 0 files).
+    if scanned == 0:
+        failed.append("0 files scanned — the scan excluded everything, so "
+                      "'nothing credential-shaped' would be meaningless")
+    elif not failed:
         print(f"ok       {scanned} files scanned, nothing credential-shaped")
     return failed
 
@@ -260,9 +317,9 @@ def run_check(prefix="sample_output"):
     sidecar, the row floor, and the two things a silently-degraded run gets
     wrong while still writing a well-formed file.
 
-    Kept here rather than inline in canary.yml because CLAUDE.md §11 is
-    explicit about it, and because a floor that lives in YAML is a floor
-    nobody runs locally before pushing.
+    Kept here rather than inline in canary.yml because a copy in a workflow
+    drifts from the shipped check, and because a floor that lives in YAML is
+    a floor nobody runs locally before pushing.
     """
     failed = []
     meta_path = REPO / f"{prefix}.meta.json"
@@ -298,6 +355,21 @@ def run_check(prefix="sample_output"):
     if len(set(skus)) != len(skus):
         failed.append(f"{len(skus) - len(set(skus))} duplicate sku(s) in the "
                       f"output — one row is meant to be one SKU")
+
+    # The core columns the parser fills from the payload. A renamed key in
+    # the API answer leaves the row count intact and empties a column, so
+    # the floor alone would stay green. sku/url/currency come from fields
+    # every size and every store carries; title and price are allowed a
+    # small tolerance for a product the site lists without them.
+    for col in ("sku", "url", "currency"):
+        missing = sum(1 for r in rows if not r.get(col))
+        if missing:
+            failed.append(f"{missing} of {len(rows)} rows have no {col}")
+    for col in ("title", "price"):
+        have = sum(1 for r in rows if r.get(col) not in (None, ""))
+        if rows and have / len(rows) < 0.95:
+            failed.append(f"only {have} of {len(rows)} rows carry a {col} "
+                          f"(expected at least 95%)")
 
     # A run that fetched but never expanded a colour tree still writes rows.
     if not any(r.get("color_name") and r.get("size_name") for r in rows):

@@ -36,6 +36,10 @@ on:
     # Once a day, off the hour, so it is not competing with everyone else's
     # on-the-hour cron jobs for runner availability.
     - cron: "37 7 * * *"
+    # Mondays: the same jobs, WITH the paid secrets (proxy, Scraping Browser,
+    # captcha key). On the daily run above those secrets read as empty, so
+    # it takes the free no-secret route and bills nothing.
+    - cron: "37 7 * * 1"
   workflow_dispatch:
 
 jobs:
@@ -45,7 +49,7 @@ jobs:
       # `secrets` is not available in a job-level `if`, so presence is tested
       # here, once, and read from each step's `if` and shell below. These are
       # the strings "true"/"false", never the secret itself.
-      HAVE_PROXY: ${{ secrets.BERSHKA_PROXY != '' }}
+      HAVE_PROXY: ${{ (github.event_name != 'schedule' || github.event.schedule == '37 7 * * 1') && secrets.BERSHKA_PROXY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -101,7 +105,7 @@ jobs:
         continue-on-error: true
         env:
           # Through the environment, never argv (see the header).
-          BERSHKA_PROXY: ${{ secrets.BERSHKA_PROXY }}
+          BERSHKA_PROXY: ${{ (github.event_name != 'schedule' || github.event.schedule == '37 7 * * 1') && secrets.BERSHKA_PROXY || '' }}
         run: |
           set +e
           python3 api_scraper.py \

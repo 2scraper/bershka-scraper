@@ -5,6 +5,12 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- CI only: the canary's optional paid secret `BERSHKA_PROXY` now reaches it only on a new weekly
+  run (Mondays 07:37 UTC) and on a manual dispatch. The daily run keeps its
+  schedule and takes the free route without them, so it bills nothing.
+
 ## [1.1.0] — 2026-10-15
 
 > **Exit codes changed.** A run that ends with zero rows now exits **5**

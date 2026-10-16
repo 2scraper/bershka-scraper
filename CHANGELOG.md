@@ -7,9 +7,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- CI only: the canary's optional paid secret `BERSHKA_PROXY` now reaches it only on a new weekly
-  run (Mondays 07:37 UTC) and on a manual dispatch. The daily run keeps its
-  schedule and takes the free route without them, so it bills nothing.
+- CI only: the canary now runs weekly (Mondays 07:37 UTC) and on a manual dispatch, with its optional secret `BERSHKA_PROXY` passed on every run; the daily schedule is removed.
 
 ## [1.1.0] — 2026-10-15
 

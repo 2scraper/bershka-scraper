@@ -342,7 +342,7 @@ pinning it:
 a plain `requests` call** through a proxy — no browser, no cookie jar, no TLS
 impersonation, checked twice and once with impersonation explicitly disabled.
 Whether you need the proxy depends on your address, not on the engine: the
-daily canary runs it from a bare GitHub runner with no proxy and was served
+weekly canary runs it from a bare GitHub runner with no proxy and was served
 (2026-10-14: 139 rows, `complete`). A browser buys nothing here except an exit and a cookie jar the API does not
 ask for.
 
@@ -462,7 +462,7 @@ python3 .github/ci_checks.py --all
 `section` on 100% of 1,907 rows with the string `"1"`, the payload's numeric
 section code, and no coverage check would have noticed.
 
-A daily canary runs the real thing against the live site and calls those same
+A weekly (Monday) canary runs the real thing against the live site and calls those same
 shipped checks rather than re-implementing them.
 
 ---

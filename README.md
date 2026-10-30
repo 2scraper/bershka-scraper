@@ -1,4 +1,4 @@
-# bershka-scraper
+# Bershka Scraper — SKU Prices, Colours, Sizes and Stock in Python
 
 [![release](https://img.shields.io/github/v/release/2scraper/bershka-scraper?sort=semver)](https://github.com/2scraper/bershka-scraper/releases)
 [![tests](https://github.com/2scraper/bershka-scraper/actions/workflows/tests.yml/badge.svg)](https://github.com/2scraper/bershka-scraper/actions/workflows/tests.yml)
@@ -7,6 +7,8 @@
 [![licence](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 [![engines](https://img.shields.io/badge/engines-Playwright%20%7C%20Selenium%20%7C%20pyppeteer%20%7C%20CDP%20%7C%20Scraper%20API-informational)](#engines)
 [![runs without an account](https://img.shields.io/badge/runs%20without%20an%20account-yes-brightgreen)](#the-exit-decides-whether-anything-works)
+
+**Bershka scraper** — an open-source (MIT) Python tool that reads bershka.com categories and products through the store's own `/itxrest/` catalogue API and writes one row per SKU — price, colour, size and availability — to JSON or CSV. Akamai's edge refuses some exit addresses outright: measured over ten exits on 2026-09-20, 4 were refused and 6 were served, so you need an exit it accepts. Use it for price monitoring across a category, or compare two runs with `diff_runs.py`.
 
 Scrapes **bershka.com** — an Inditex storefront whose catalogue lives entirely
 behind its own `/itxrest/` API — into one row per SKU, as JSON and CSV. Three
@@ -533,3 +535,20 @@ not attempt to reach anything behind an account.
 MIT licensed — see [LICENSE](LICENSE).
 
 Built by [2Captcha](https://2captcha.com).
+
+## Guides
+
+- [How to run the 2scraper scrapers: setup, proxies, exit codes and access modes](https://2captcha.com/h/how-to-run-2scraper-open-source-scrapers) — installation, `.env`, `.meta.json` for the whole family.
+
+## Related scrapers
+
+Same CLI conventions, same output contract (one row per item, JSON or CSV, a `.meta.json` sidecar and shared exit codes):
+
+- [Catawiki scraper](https://github.com/2scraper/catawiki-scraper) — Auction lots, bids, reserves, estimates and sellers…
+- [Etsy scraper](https://github.com/2scraper/etsy-scraper) — Search, category, shop and listing pages as JSON or CSV…
+- [Farfetch scraper](https://github.com/2scraper/farfetch-scraper) — Luxury fashion listings and per-size product data…
+- [Givenchy Beauty scraper](https://github.com/2scraper/givenchy-scraper) — Products, prices and shades across 11 storefront locales
+- [Home Depot scraper](https://github.com/2scraper/homedepot-scraper) — Per-store prices, stock, brands, models and ratings…
+- [Indiegogo scraper](https://github.com/2scraper/indiegogo-scraper) — Project listings, campaign pages and reward tiers
+
+All scrapers: [github.com/2scraper](https://github.com/2scraper) · Need another site? [Open a request](https://github.com/2scraper/.github/issues/new?title=%5BScraper%20request%5D%20)

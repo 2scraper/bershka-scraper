@@ -1,0 +1,90 @@
+{
+ "_comment": "A real /fingerprint/random?format=chromium response (2026-09-30, tags=Windows, country=de), trimmed to the fields fingerprint_client.py reads plus their siblings; the dropped keys are listed in _dropped.",
+ "id": 5573997,
+ "country": "DE",
+ "screen": {
+  "deviceScaleFactor": 1.25,
+  "width": 1366,
+  "height": 768,
+  "outerWidth": 1366,
+  "outerHeight": 648
+ },
+ "intl": {
+  "contentLocale": "de-DE",
+  "languages": [
+   "de-DE",
+   "de",
+   "en-US",
+   "en"
+  ],
+  "timeZone": "Europe/Berlin"
+ },
+ "userAgent": {
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "fullVersion": "150.0.7871.47",
+  "platform": "Windows",
+  "platformVersion": "10.0.0",
+  "architecture": "x86",
+  "model": "",
+  "mobile": false,
+  "bitness": "64",
+  "wow64": false,
+  "formFactors": [
+   "Desktop"
+  ],
+  "brandVersionList": [
+   {
+    "brand": "Not;A=Brand",
+    "version": "8"
+   },
+   {
+    "brand": "Chromium",
+    "version": "150"
+   },
+   {
+    "brand": "Google Chrome",
+    "version": "150"
+   }
+  ],
+  "brandFullVersionList": [
+   {
+    "brand": "Not;A=Brand",
+    "version": "8.0.0.0"
+   },
+   {
+    "brand": "Chromium",
+    "version": "150.0.7871.47"
+   },
+   {
+    "brand": "Google Chrome",
+    "version": "150.0.7871.47"
+   }
+  ]
+ },
+ "navigator": {
+  "deviceMemory": 16,
+  "hardwareConcurrency": 20,
+  "maxTouchPoints": 0,
+  "platform": "Win32",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "vendor": "Google Inc."
+ },
+ "webgl": {
+  "glParameters": {
+   "7936": "WebKit",
+   "7937": "WebKit WebGL",
+   "37445": "Google Inc. (Intel)",
+   "37446": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x000046A6) Direct3D11 vs_5_0 ps_5_0, D3D11)"
+  }
+ },
+ "_dropped": [
+  "media",
+  "speechSynthesis",
+  "v8",
+  "webgpu",
+  "webrtc",
+  "webgl.<all but four glParameters>",
+  "screen.screenRect",
+  "screen.availScreenRect"
+ ]
+}

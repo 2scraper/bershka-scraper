@@ -423,6 +423,10 @@ def run(args, driver) -> int:
 
     from api_scraper import _report
     _report(result)
+    extra = None
+    if getattr(driver, "fingerprint_facts", None) is not None:
+        # The same dict the driver fills in after the first page.
+        extra = {"transport_facts": {"fingerprint": driver.fingerprint_facts}}
     return finish_run(
         result.rows, args.out, args.format, args.allow_empty,
         blocked=False, stop_reason=result.stop_reason,
@@ -434,7 +438,7 @@ def run(args, driver) -> int:
             locale=args.site_locale, category=args.category,
             grid_ids=result.grid_ids, max_grids=args.max_grids,
             max_skus=args.max_skus),
-        start_url=start_url, final_url=P.BASE, mode=args.mode)
+        start_url=start_url, final_url=P.BASE, mode=args.mode, extra=extra)
 
 
 def positive_int(text: str) -> int:

@@ -5,7 +5,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `playwright_scraper.py --fingerprint` (with `--fp-tags`, `--fp-country`, `--fp-refresh`) fetches a profile from the 2Captcha Fingerprint API and applies it to the locally launched Chromium: user agent with matching client hints, locale, timezone, screen, navigator values and WebGL strings. The values are read back from the page after the first navigation and recorded under `transport_facts.fingerprint` in the run metadata. Never applied over the Scraping Browser API: a typed `--cdp-endpoint` with `--fingerprint` exits 2, and an endpoint from `.env` is ignored for that run. A missing key exits 2; a Fingerprint API refusal exits 5 before any page is fetched. The Selenium and pyppeteer engines reject the flag (exit 2).
+
 ### Changed
+
+- `fingerprint_client.py` reads the fields where a real Fingerprint API response keeps them (the WebGL strings are in `webgl.glParameters`), sets client hints over CDP so `Sec-CH-UA` no longer reports the real HeadlessChrome version, and no longer invents a locale from the country when the response has none.
 
 - CI only: the canary now runs weekly (Mondays 07:37 UTC) and on a manual dispatch, with its optional secret `BERSHKA_PROXY` passed on every run; the daily schedule is removed.
 

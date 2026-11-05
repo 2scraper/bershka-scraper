@@ -365,6 +365,40 @@ Selenium cannot attach to an authenticated CDP endpoint and cannot
 authenticate a proxy — chromedriver has nowhere to put the credentials. It
 refuses rather than connecting as somebody else.
 
+### A 2Captcha fingerprint on a locally launched browser
+
+`playwright_scraper.py --fingerprint` fetches one profile from the
+[2Captcha Fingerprint API](https://2captcha.com/fingerprints/api) and applies
+it to the Chromium the engine launches itself: user agent with matching
+client hints (`Sec-CH-UA*`, `navigator.userAgentData`), locale and
+`Accept-Language`, timezone, screen and viewport, navigator values and the
+WebGL vendor/renderer strings.
+
+```bash
+python3 playwright_scraper.py --fingerprint --fp-country de --site-locale de --max-grids 1
+```
+
+- `--fp-tags` takes one OS-family tag (default `Windows`), `--fp-country` an
+  ISO country code; match it to your exit. The profile is cached per flag set
+  under `~/.cache/2captcha-fingerprints`; `--fp-refresh` fetches a new one.
+- It uses `TWOCAPTCHA_KEY`, but fingerprints are a separately billed
+  subscription: a key without it gets HTTP 403 and the run exits 5 before
+  any page is fetched.
+- It is never applied on top of the Scraping Browser API, which brings its
+  own: `--fingerprint` with a typed `--cdp-endpoint` is a usage error (exit
+  2), and a `BERSHKA_CDP_ENDPOINT` from `.env` is ignored for that run.
+  `selenium_scraper.py` and `puppeteer_scraper.py` do not implement it and
+  reject the flag (exit 2).
+- After the first page the engine reads the values back from the live page
+  and records them, with any mismatch, under `transport_facts.fingerprint`
+  in `<out>.meta.json`.
+
+Measured 2026-11-05 on `de`, one grid, 20 rows: every read-back value matched
+the profile. That run used a real Fingerprint API response from 2026-09-30
+served from the cache, because the test key had no fingerprint plan that day;
+a fresh fetch was not exercised. Whether a fingerprint changes how often the
+edge refuses an exit was not measured, and nothing here claims it does.
+
 ---
 
 ## Configuration
@@ -374,7 +408,7 @@ loader. Never a command line: `ps` reads argv.
 
 | variable | used by |
 |---|---|
-| `TWOCAPTCHA_KEY` | `scraper_api_client.py`, the solver fallback, the tools |
+| `TWOCAPTCHA_KEY` | `scraper_api_client.py`, the solver fallback, `playwright_scraper.py --fingerprint`, the tools |
 | `BERSHKA_PROXY` | every engine that picks its own exit |
 | `BERSHKA_CDP_ENDPOINT` | the three browser engines (not the Scraper API client: pass `--cdp-url` there explicitly) |
 
